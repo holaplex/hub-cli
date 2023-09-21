@@ -1,0 +1,8 @@
+mutation QueueMintToDrop($in: QueueMintToDropInput!) {
+  queueMintToDrop(input: $in) {
+    collectionMint {
+      id
+      creationStatus
+    }
+  }
+}
