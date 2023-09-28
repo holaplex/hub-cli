@@ -100,7 +100,16 @@ pub struct UploadDrop {
     #[arg(short = 'd', long = "drop")]
     pub drop_id: Uuid,
 
-    /// Path to the structured asset directory
-    #[arg(short = 'p', long = "assets")]
-    pub asset_dir: PathBuf,
+    /// Specify a search path for assets
+    #[arg(short = 'I', long = "include")]
+    pub include_dirs: Vec<PathBuf>,
+
+    /// Limit the number of concurrently-running jobs
+    #[arg(short = 'j', long = "jobs", default_value_t = 4)]
+    pub jobs: u16,
+
+    /// Path to a directory containing metadata JSON files to upload
+    #[arg(required = true)]
+    pub input_dirs: Vec<PathBuf>,
+
 }

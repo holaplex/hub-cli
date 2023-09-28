@@ -1,4 +1,7 @@
+#![allow(dead_code)] // TODO: replace with RocksDB?
+
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::ErrorKind,
     path::{Path, PathBuf},
@@ -6,6 +9,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 const SWAPFILE_NAME: &str = ".hub.cache~";
 const FILE_NAME: &str = ".hub.cache";
@@ -62,15 +66,37 @@ impl<T: Default> CacheItem<T> {
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Cache {
-    asset_uploads: CacheItem<AssetUploads>,
+    path: PathBuf,
+    contents: CacheContents,
 }
 
 impl Cache {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = cache_file(&path);
-        let file = match File::open(&path) {
+        let contents = CacheContents::load(&path)?;
+        Ok(Self { path, contents })
+    }
+
+    #[inline]
+    pub fn json_uploads_mut(&mut self) -> &mut JsonUploads { self.contents.json_uploads.as_mut() }
+
+    #[inline]
+    pub fn asset_uploads_mut(&mut self) -> &mut AssetUploads {
+        self.contents.asset_uploads.as_mut()
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct CacheContents {
+    json_uploads: CacheItem<JsonUploads>,
+    asset_uploads: CacheItem<AssetUploads>,
+}
+
+impl CacheContents {
+    fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let file = match File::open(path) {
             Ok(f) => f,
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Self::default()),
             Err(e) => return Err(e).with_context(|| format!("Error opening cache file {path:?}")),
@@ -79,7 +105,7 @@ impl Cache {
         ron::de::from_reader(file).with_context(|| format!("Error parsing cache file {path:?}"))
     }
 
-    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+    fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let swap = swap_file(&path);
         let path = cache_file(path);
         let file = File::create(&swap)
@@ -90,10 +116,14 @@ impl Cache {
 
         fs::rename(swap, &path).with_context(|| format!("Error writing to cache file {path:?}"))
     }
-
-    #[inline]
-    pub fn asset_uploads_mut(&mut self) -> &mut AssetUploads { self.asset_uploads.as_mut() }
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AssetUploads {}
+pub struct JsonUploads {
+    uploaded: HashMap<PathBuf, Url>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetUploads {
+    uploaded: HashMap<PathBuf, Url>,
+}

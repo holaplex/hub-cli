@@ -20,6 +20,13 @@ mod commands {
     pub mod upload_drop;
 }
 
+mod common {
+    pub mod concurrent;
+    pub mod metadata_json;
+    pub mod toposort;
+    pub mod url_permissive;
+}
+
 use anyhow::{Context, Result};
 use cli::{Opts, Subcommand, UploadSubcommand};
 use config::{Config, ConfigLocation};
@@ -47,6 +54,7 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
 }
 
 fn run() -> Result<()> {
+    env_logger::init();
     let Opts { config, subcmd } = clap::Parser::parse();
     let config = |w| ConfigLocation::new(config, w);
 

@@ -1,8 +1,7 @@
 mutation QueueMintToDrop($in: QueueMintToDropInput!) {
   queueMintToDrop(input: $in) {
     collectionMint {
-      id
-      creationStatus
+      id # TODO: what's the minimal set of fields needed for caching?
     }
   }
 }
