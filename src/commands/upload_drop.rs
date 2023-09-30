@@ -6,15 +6,19 @@ use std::{
     io::{self, prelude::*},
     iter,
     num::NonZeroUsize,
-    path::PathBuf,
-    sync::{Arc, OnceLock},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, OnceLock,
+    },
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::{bail, Context as _, Result};
 use crossbeam::{
     channel::{self, Sender},
     queue::ArrayQueue,
 };
+use dashmap::DashMap;
 use futures_util::FutureExt;
 use graphql_client::GraphQLQuery;
 use itertools::Either;
@@ -26,15 +30,16 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
+    cache::{AssetUpload, AssetUploadCache, Cache, CacheConfig, Checksum, DropMint, DropMintCache},
     cli::UploadDrop,
     common::{
         concurrent,
         metadata_json::{self, MetadataJson},
+        tokio::runtime,
         toposort::{Dependencies, Dependency, PendingFail},
         url_permissive::PermissiveUrl,
     },
     config::Config,
-    runtime,
 };
 
 type UploadResponse = Vec<UploadedAsset>;
@@ -52,7 +57,7 @@ type UUID = Uuid;
 #[graphql(
     schema_path = "src/queries/schema.graphql",
     query_path = "src/queries/queue-mint-to-drop.graphql",
-    variables_derives = "Debug",
+    variables_derives = "Debug, PartialEq, Eq, Hash",
     response_derives = "Debug"
 )]
 struct QueueMintToDrop;
@@ -133,7 +138,13 @@ impl From<metadata_json::File> for queue_mint_to_drop::MetadataJsonFileInput {
     }
 }
 
-pub fn run(config: &Config, args: UploadDrop) -> Result<()> {
+#[derive(Default)]
+struct Stats {
+    uploaded_assets: AtomicUsize,
+    queued_mints: AtomicUsize,
+}
+
+pub fn run(config: &Config, cache: CacheConfig, args: UploadDrop) -> Result<()> {
     let UploadDrop {
         drop_id,
         include_dirs,
@@ -143,36 +154,47 @@ pub fn run(config: &Config, args: UploadDrop) -> Result<()> {
     let include_dirs: HashSet<_> = include_dirs.into_iter().collect();
 
     let (tx, rx) = channel::unbounded();
-    for path in input_dirs
-        .iter()
-        .flat_map(|d| match fs::read_dir(d) {
-            Ok(r) => {
-                trace!("Traversing directory {r:?}");
+    for (dir, path) in input_dirs.iter().flat_map(|d| match fs::read_dir(d) {
+        Ok(r) => {
+            trace!("Traversing directory {r:?}");
 
-                Either::Left(r.map(move |f| {
-                    let f = f.with_context(|| format!("Error reading JSON directory {d:?}"))?;
-                    let path = f.path();
+            Either::Left(r.filter_map(move |f| {
+                let path = f
+                    .with_context(|| format!("Error reading JSON directory {d:?}"))
+                    .map(|f| {
+                        let path = f.path();
 
-                    Ok(if path.extension().map_or(false, |p| p == "json") {
-                        Some(path)
-                    } else {
-                        None
+                        if path.extension().map_or(false, |p| p == "json") {
+                            Some(path)
+                        } else {
+                            None
+                        }
                     })
-                }))
-            },
-            Err(e) => Either::Right(
-                [Err(e).context(format!("Error opening JSON directory {d:?}"))].into_iter(),
-            ),
-        })
-        .filter_map(Result::transpose)
-    {
-        tx.send(Job::ScanJson(ScanJsonJob { path }))
-            .context("Error seeding initial job queue")?;
+                    .transpose()?;
+
+                Some((d, path))
+            }))
+        },
+        Err(e) => Either::Right(
+            [(
+                d,
+                Err(e).context(format!("Error opening JSON directory {d:?}")),
+            )]
+            .into_iter(),
+        ),
+    }) {
+        tx.send(Job::ScanJson(ScanJsonJob {
+            dir: dir.clone(),
+            path,
+        }))
+        .context("Error seeding initial job queue")?;
     }
 
-    info!("Processing {} JSON files(s)...", rx.len());
+    info!("Scanning {} JSON files(s)...", rx.len());
 
     let ctx = Context {
+        cache_config: cache,
+        caches: Arc::default(),
         include_dirs: include_dirs
             .into_iter()
             .collect::<Vec<_>>()
@@ -183,6 +205,7 @@ pub fn run(config: &Config, args: UploadDrop) -> Result<()> {
         upload_endpoint: config.upload_endpoint()?,
         client: config.graphql_client()?,
         q: tx,
+        stats: Arc::default(),
     };
 
     runtime()?.block_on(async move {
@@ -211,6 +234,16 @@ pub fn run(config: &Config, args: UploadDrop) -> Result<()> {
 
         debug_assert!(rx.is_empty(), "Trailing jobs in queue");
 
+        let Stats {
+            uploaded_assets,
+            queued_mints,
+        } = &*ctx.stats;
+        info!(
+            "Uploaded {assets} asset(s) and queued {mints} mint(s)",
+            assets = uploaded_assets.load(std::sync::atomic::Ordering::Relaxed),
+            mints = queued_mints.load(std::sync::atomic::Ordering::Relaxed)
+        );
+
         res
     })?;
 
@@ -219,15 +252,27 @@ pub fn run(config: &Config, args: UploadDrop) -> Result<()> {
 
 #[derive(Clone)]
 struct Context {
+    cache_config: CacheConfig,
+    caches: Arc<DashMap<PathBuf, Cache>>,
     include_dirs: Arc<[PathBuf]>,
     drop_id: Uuid,
     graphql_endpoint: Url,
     upload_endpoint: Url,
     client: reqwest::Client,
     q: Sender<Job>,
+    stats: Arc<Stats>,
 }
 
 impl Context {
+    fn cache(&self, path: impl AsRef<Path>) -> Result<Cache> {
+        let entry = self
+            .caches
+            .entry(path.as_ref().to_path_buf())
+            .or_try_insert_with(|| Cache::load_sync(path, self.cache_config.clone()))?;
+
+        Ok((*entry).clone())
+    }
+
     fn resolve_file<F: FnMut(&PathBuf) -> io::Result<T>, T>(
         &self,
         mut open: F,
@@ -252,15 +297,19 @@ impl Context {
 
 #[derive(Debug)]
 struct ScanJsonJob {
+    dir: PathBuf,
     path: Result<PathBuf>,
 }
 
 impl ScanJsonJob {
     fn run(self, ctx: Context) -> JoinHandle<Result<()>> {
         tokio::task::spawn_blocking(move || {
-            let Self { path } = self;
+            let Self { dir, path } = self;
             let path = path?;
             let json_file = File::open(&path).with_context(|| format!("Error opening {path:?}"))?;
+
+            let ck = Checksum::read_rewind(&path, &json_file)?;
+
             let json: MetadataJson = serde_json::from_reader(json_file)
                 .with_context(|| format!("Error parsing {path:?}"))?;
 
@@ -318,14 +367,16 @@ impl ScanJsonJob {
                         }
                     };
 
-                    Some(Ok((url, path, ty)))
+                    Some(Ok((url, include_dir.clone(), path, ty)))
                 })
                 .collect::<Vec<_>>();
 
             if let Some(dep_count) = NonZeroUsize::new(local_urls.len()) {
                 let rewrites = Arc::new(ArrayQueue::new(dep_count.get()));
                 let deps = Dependencies::new(dep_count, QueueJsonJob {
+                    dir,
                     path,
+                    ck,
                     json,
                     rewrites: Some(Arc::clone(&rewrites)),
                 });
@@ -334,8 +385,9 @@ impl ScanJsonJob {
                 for (res, dep) in local_urls.into_iter().zip(deps) {
                     ctx.q
                         .send(Job::UploadAsset(UploadAssetJob {
-                            asset: res.map(|(source_url, path, mime_type)| Asset {
+                            asset: res.map(|(source_url, dir, path, mime_type)| Asset {
                                 source_url,
+                                dir,
                                 path,
                                 mime_type,
                             }),
@@ -347,7 +399,9 @@ impl ScanJsonJob {
             } else {
                 ctx.q
                     .send(Job::QueueJson(QueueJsonJob {
+                        dir,
                         path,
+                        ck,
                         json,
                         rewrites: None,
                     }))
@@ -370,6 +424,7 @@ type FileRewrites = Arc<ArrayQueue<FileRewrite>>;
 #[derive(Debug)]
 struct Asset {
     source_url: PermissiveUrl,
+    dir: PathBuf,
     path: PathBuf,
     mime_type: Cow<'static, str>,
 }
@@ -390,63 +445,98 @@ impl UploadAssetJob {
                 dep,
             } = self;
             let Asset {
+                dir,
                 path,
                 mime_type,
                 source_url,
             } = asset?;
 
-            let file = tokio::fs::File::open(&path)
+            let mut file = tokio::fs::File::open(&path)
                 .await
                 .with_context(|| format!("Error opening {path:?}"))?;
-            let name = path
-                .file_name()
-                .with_context(|| format!("Error resolving file name for {path:?}"))?
-                .to_string_lossy()
-                .into_owned();
+            let ck = Checksum::read_rewind_async(&path, &mut file).await?;
 
-            let mut uploads = ctx
-                .client
-                .post(ctx.upload_endpoint)
-                .multipart(
-                    multipart::Form::new().part(
-                        "FIXME", // TODO
-                        multipart::Part::stream(file)
-                            .file_name(name.clone())
-                            .mime_str(&mime_type)
-                            .with_context(|| {
-                                format!("Invalid MIME type {:?} for {path:?}", mime_type.as_ref())
-                            })?,
-                    ),
-                )
-                .send()
-                .await
-                .with_context(|| format!("Error sending POST request for {path:?}"))?
-                .error_for_status()
-                .with_context(|| format!("POST request for {path:?} returned an error"))?
-                .json::<UploadResponse>()
-                .await
-                .with_context(|| format!("Error deserializing upload response JSON for {path:?}"))?
-                .into_iter();
+            let cache: AssetUploadCache = ctx.cache(dir)?.get().await?;
+            let cached_url = cache
+                .get(path.clone(), ck)
+                .await?
+                .and_then(|AssetUpload { url }| {
+                    Url::parse(&url)
+                        .map_err(|e| warn!("Invalid cache URL {url:?}: {e}"))
+                        .ok()
+                });
 
-            if uploads.len() > 1 {
-                warn!("Trailing values in response data for {path:?}");
+            let dest_url;
+            if let Some(url) = cached_url {
+                trace!("Using cached URL {:?} for {path:?}", url.as_str());
+                dest_url = url;
+            } else {
+                let name = path
+                    .file_name()
+                    .with_context(|| format!("Error resolving file name for {path:?}"))?
+                    .to_string_lossy()
+                    .into_owned();
+
+                let mut uploads = ctx
+                    .client
+                    .post(ctx.upload_endpoint)
+                    .multipart(
+                        multipart::Form::new().part(
+                            "upload",
+                            multipart::Part::stream(file)
+                                .file_name(name.clone())
+                                .mime_str(&mime_type)
+                                .with_context(|| {
+                                    format!(
+                                        "Invalid MIME type {:?} for {path:?}",
+                                        mime_type.as_ref()
+                                    )
+                                })?,
+                        ),
+                    )
+                    .send()
+                    .await
+                    .with_context(|| format!("Error sending POST request for {path:?}"))?
+                    .error_for_status()
+                    .with_context(|| format!("POST request for {path:?} returned an error"))?
+                    .json::<UploadResponse>()
+                    .await
+                    .with_context(|| {
+                        format!("Error deserializing upload response JSON for {path:?}")
+                    })?
+                    .into_iter();
+
+                if uploads.len() > 1 {
+                    warn!("Trailing values in response data for {path:?}");
+                }
+
+                let upload = uploads
+                    .find(|u| u.name == name)
+                    .with_context(|| format!("Missing upload response data for {path:?}"))?;
+
+                ctx.stats.uploaded_assets.fetch_add(1, Ordering::Relaxed);
+                info!("Successfully uploaded {path:?}");
+
+                cache
+                    .set(path.clone(), ck, AssetUpload {
+                        url: upload.url.to_string(),
+                    })
+                    .await
+                    .map_err(|e| warn!("{e:?}"))
+                    .ok();
+
+                dest_url = upload.url;
             }
-
-            let upload = uploads
-                .find(|u| u.name == name)
-                .with_context(|| format!("Missing upload response data for {path:?}"))?;
 
             rewrites
                 .push(FileRewrite {
                     source_url,
-                    dest_url: upload.url,
+                    dest_url,
                     mime_type,
                 })
                 .unwrap_or_else(|_: FileRewrite| {
                     unreachable!("Too many file rewrites for {path:?}")
                 });
-
-            info!("Successfully uploaded {path:?}");
 
             dep.ok(|j| ctx.q.send(Job::QueueJson(j)))
                 .transpose()
@@ -459,13 +549,19 @@ impl UploadAssetJob {
 
 #[derive(Debug)]
 struct QueueJsonJob {
+    dir: PathBuf,
     path: PathBuf,
+    ck: Checksum,
     json: MetadataJson,
     rewrites: Option<FileRewrites>,
 }
 
 impl QueueJsonJob {
-    fn format_errors(errors: Option<Vec<graphql_client::Error>>, f: impl FnOnce(String)) -> bool {
+    fn format_errors<T>(
+        errors: Option<Vec<graphql_client::Error>>,
+        ok: T,
+        f: impl FnOnce(String) -> T,
+    ) -> T {
         let mut errs = errors.into_iter().flatten().peekable();
 
         if errs.peek().is_some() {
@@ -475,58 +571,64 @@ impl QueueJsonJob {
                 write!(s, "\n  {err}").unwrap();
             }
 
-            f(s);
-            true
+            f(s)
         } else {
-            false
+            ok
+        }
+    }
+
+    fn rewrite_json(json: &mut MetadataJson, rewrites: Option<Arc<ArrayQueue<FileRewrite>>>) {
+        let rewrites: HashMap<_, _> = rewrites
+            .into_iter()
+            .flat_map(|r| iter::from_fn(move || r.pop()))
+            .map(
+                |FileRewrite {
+                     source_url,
+                     dest_url,
+                     mime_type,
+                 }| (source_url, (dest_url, mime_type)),
+            )
+            .collect();
+
+        for file in json.files_mut() {
+            if let Some((url, _)) = rewrites.get(file) {
+                *file = PermissiveUrl::Url(url.clone());
+            }
+        }
+
+        let seen_files: HashMap<_, _> = json
+            .properties
+            .files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.uri.clone(), i))
+            .collect();
+
+        for (uri, ty) in rewrites.into_values() {
+            let uri = PermissiveUrl::Url(uri);
+            if let Some(idx) = seen_files.get(&uri) {
+                json.properties.files[*idx].ty = Some(ty.into_owned());
+            } else {
+                json.properties.files.push(metadata_json::File {
+                    uri,
+                    ty: Some(ty.into_owned()),
+                });
+            }
         }
     }
 
     fn run(self, ctx: Context) -> JoinHandle<Result<()>> {
         tokio::spawn(async move {
             let Self {
+                dir,
+                ck,
                 path,
                 mut json,
                 rewrites,
             } = self;
+            let cache: DropMintCache = ctx.cache(dir)?.get().await?;
 
-            let rewrites: HashMap<_, _> = rewrites
-                .into_iter()
-                .flat_map(|r| iter::from_fn(move || r.pop()))
-                .map(
-                    |FileRewrite {
-                         source_url,
-                         dest_url,
-                         mime_type,
-                     }| (source_url, (dest_url, mime_type)),
-                )
-                .collect();
-
-            for file in json.files_mut() {
-                if let Some((url, _)) = rewrites.get(file) {
-                    *file = PermissiveUrl::Url(url.clone());
-                }
-            }
-
-            let seen_files: HashMap<_, _> = json
-                .properties
-                .files
-                .iter()
-                .enumerate()
-                .map(|(i, f)| (f.uri.clone(), i))
-                .collect();
-
-            for (uri, ty) in rewrites.into_values() {
-                let uri = PermissiveUrl::Url(uri);
-                if let Some(idx) = seen_files.get(&uri) {
-                    json.properties.files[*idx].ty = Some(ty.into_owned());
-                } else {
-                    json.properties.files.push(metadata_json::File {
-                        uri,
-                        ty: Some(ty.into_owned()),
-                    });
-                }
-            }
+            Self::rewrite_json(&mut json, rewrites);
 
             let input = queue_mint_to_drop::Variables {
                 in_: queue_mint_to_drop::QueueMintToDropInput {
@@ -534,13 +636,30 @@ impl QueueJsonJob {
                     metadata_json: json.into(),
                 },
             };
+            let input_ck = Checksum::hash(&input);
 
             trace!(
                 "GraphQL input for {path:?}: {}",
                 serde_json::to_string(&input).map_or_else(|e| e.to_string(), |j| j.to_string())
             );
 
-            let res = ctx
+            let cached_mint = cache.get(path.clone(), ck).await?;
+
+            if let Some(mint) = cached_mint {
+                trace!("Using cached mint {mint:?} for {path:?}");
+
+                if mint.input_hash != input_ck.to_bytes() {
+                    trace!(
+                        "Hash mismatch for {path:?}: {:032x} cached vs {input_ck:?} new",
+                        u128::from_le_bytes(mint.input_hash.try_into().unwrap_or_default())
+                    );
+                    warn!(
+                        "Detected a change in {path:?} since it was uploaded - this will be \
+                         ignored!"
+                    );
+                }
+            } else {
+                let res = ctx
                 .client
                 .post(ctx.graphql_endpoint)
                 .json(&QueueMintToDrop::build_query(input))
@@ -557,33 +676,47 @@ impl QueueJsonJob {
                     format!("Error parsing queueMintToDrop mutation response for {path:?}")
                 })?;
 
-            trace!("GraphQL response for {path:?}: {res:?}");
+                trace!("GraphQL response for {path:?}: {res:?}");
 
-            if let Some(data) = res.data {
-                Self::format_errors(res.errors, |s| {
-                    warn!("queueMintToDrop mutation for {path:?} returned one or more errors:{s}");
-                });
+                let collection_mint;
+                if let Some(data) = res.data {
+                    Self::format_errors(res.errors, (), |s| {
+                        warn!(
+                            "queueMintToDrop mutation for {path:?} returned one or more errors:{s}"
+                        );
+                    });
 
-                let queue_mint_to_drop::ResponseData {
-                    queue_mint_to_drop:
-                        queue_mint_to_drop::QueueMintToDropQueueMintToDrop {
-                            collection_mint:
-                                queue_mint_to_drop::QueueMintToDropQueueMintToDropCollectionMint {
-                                    id,
-                                    collection,
-                                },
-                        },
-                } = data;
+                    let queue_mint_to_drop::ResponseData {
+                        queue_mint_to_drop:
+                            queue_mint_to_drop::QueueMintToDropQueueMintToDrop {
+                                collection_mint:
+                                    queue_mint_to_drop::QueueMintToDropQueueMintToDropCollectionMint {
+                                        id,
+                                    },
+                            },
+                    } = data;
+                    collection_mint = id;
 
-                info!("Mint successfully queued for {path:?}");
-            } else {
-                let had_errs = Self::format_errors(res.errors, |s| {
-                    error!("queueMintToDrop mutation for {path:?} returned one or more errors:{s}");
-                });
+                    ctx.stats.queued_mints.fetch_add(1, Ordering::Relaxed);
+                    info!("Mint successfully queued for {path:?}");
+                } else {
+                    Self::format_errors(res.errors, Ok(()), |s| {
+                        bail!(
+                            "queueMintToDrop mutation for {path:?} returned one or more errors:{s}"
+                        )
+                    })?;
 
-                if !had_errs {
-                    error!("queueMintToDrop mutation for {path:?} returned no data");
+                    bail!("queueMintToDrop mutation for {path:?} returned no data");
                 }
+
+                cache
+                    .set(path, ck, DropMint {
+                        collection_mint: collection_mint.to_bytes_le().into(),
+                        input_hash: input_ck.to_bytes().into(),
+                    })
+                    .await
+                    .map_err(|e| warn!("{e:?}"))
+                    .ok();
             }
 
             Ok(())

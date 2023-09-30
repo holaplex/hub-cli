@@ -1,13 +1,13 @@
 use std::{
     iter,
+    num::NonZeroUsize,
     sync::{
         atomic::{self, AtomicUsize},
         Arc,
-    }, num::NonZeroUsize,
+    },
 };
 
 use dispose::{Disposable, Dispose};
-use log::error;
 use parking_lot::Mutex;
 
 pub trait PendingFail {

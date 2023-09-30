@@ -7,10 +7,42 @@ use std::{io::IsTerminal, path::PathBuf};
 
 use uuid::Uuid;
 
+/// Convert the parseable `ColorChoice` to `env_logger`'s `WriteStyle`
+pub fn log_color(color: clap::ColorChoice) -> env_logger::WriteStyle {
+    use clap::ColorChoice as C;
+    use env_logger::WriteStyle as S;
+
+    match color {
+        C::Never => S::Never,
+        C::Auto => S::Auto,
+        C::Always => S::Always,
+    }
+}
+
 #[derive(clap::Parser)]
 #[command(author, version, about)]
 /// Top-level options for the hub command
 pub struct Opts {
+    /// Adjust log level globally or on a per-module basis
+    ///
+    /// This flag uses the same syntax as the env_logger crate.
+    #[arg(
+        long,
+        global = true,
+        env = env_logger::DEFAULT_FILTER_ENV,
+        default_value = "info",
+    )]
+    pub log_level: String,
+
+    /// Adjust when to output colors to the terminal
+    #[arg(
+        long,
+        global = true,
+        env = env_logger::DEFAULT_WRITE_STYLE_ENV,
+        default_value_t = clap::ColorChoice::Auto,
+    )]
+    pub color: clap::ColorChoice,
+
     /// Use a different Hub config file than the default
     ///
     /// By default, hub first searches the current directory for a file named
@@ -20,9 +52,29 @@ pub struct Opts {
     #[arg(short = 'C', long, global = true)]
     pub config: Option<PathBuf>,
 
+    /// Cache options
+    #[command(flatten)]
+    pub cache: CacheOpts,
+
     /// Name of the subcommand to run
     #[command(subcommand)]
     pub subcmd: Subcommand,
+}
+
+/// Top-level command options related to the cache
+#[derive(clap::Args)]
+pub struct CacheOpts {
+    /// Number of threads to use for cache management
+    #[arg(long, global = true, default_value_t = num_cpus::get())]
+    pub cache_threads: usize,
+
+    /// Maximum cache write buffer size
+    #[arg(long, global = true, default_value_t = 64 << 20)]
+    pub cache_write_buf: usize,
+
+    /// Maximum in-memory cache size
+    #[arg(long, global = true, default_value_t = 128 << 20)]
+    pub cache_lru_size: usize,
 }
 
 /// Top-level subcommands for hub
@@ -111,5 +163,4 @@ pub struct UploadDrop {
     /// Path to a directory containing metadata JSON files to upload
     #[arg(required = true)]
     pub input_dirs: Vec<PathBuf>,
-
 }

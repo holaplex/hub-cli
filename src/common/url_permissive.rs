@@ -23,10 +23,12 @@ impl PermissiveUrl {
 
 impl From<PermissiveUrl> for String {
     #[inline]
-    fn from(val: PermissiveUrl) -> Self { match val {
-        PermissiveUrl::Url(u) => u.into(),
-        PermissiveUrl::Path(p) => p.to_string_lossy().into_owned(),
-    }}
+    fn from(val: PermissiveUrl) -> Self {
+        match val {
+            PermissiveUrl::Url(u) => u.into(),
+            PermissiveUrl::Path(p) => p.to_string_lossy().into_owned(),
+        }
+    }
 }
 
 impl FromStr for PermissiveUrl {
@@ -39,7 +41,11 @@ impl FromStr for PermissiveUrl {
     }
 }
 
-impl<Rhs> PartialEq<Rhs> for PermissiveUrl where Url: PartialEq<Rhs>, PathBuf: PartialEq<Rhs> {
+impl<Rhs> PartialEq<Rhs> for PermissiveUrl
+where
+    Url: PartialEq<Rhs>,
+    PathBuf: PartialEq<Rhs>,
+{
     fn eq(&self, other: &Rhs) -> bool {
         match self {
             PermissiveUrl::Url(u) => u.eq(other),

@@ -73,7 +73,8 @@ impl Properties {
         files.is_empty() && category.is_none()
     }
 
-    pub fn find_file<U>(&self, url: &U) -> Option<&File> where PermissiveUrl: PartialEq<U> {
+    pub fn find_file<U>(&self, url: &U) -> Option<&File>
+    where PermissiveUrl: PartialEq<U> {
         self.files.iter().find(|f| f.uri == *url)
     }
 }
