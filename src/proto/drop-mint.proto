@@ -1,0 +1,8 @@
+syntax = 'proto3';
+
+package cache.drop_mints;
+
+message DropMint {
+  bytes collection_mint = 1;
+  bytes input_hash = 2;
+}

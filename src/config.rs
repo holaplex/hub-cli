@@ -172,17 +172,6 @@ impl Config {
             .context("Error building HTTP client")
     }
 
-    #[inline]
-    pub fn post_graphql<'a, Q: graphql_client::GraphQLQuery + 'a>(
-        &self,
-        client: &'a Client,
-        vars: Q::Variables,
-    ) -> impl std::future::Future<
-        Output = Result<graphql_client::Response<Q::ResponseData>, reqwest::Error>,
-    > + 'a {
-        graphql_client::reqwest::post_graphql::<Q, _>(client, self.graphql_endpoint.clone(), vars)
-    }
-
     pub fn hub_endpoint(&self) -> Result<Cow<Url>> {
         self.hub_endpoint.as_ref().map(Cow::Borrowed).map_or_else(
             || {
@@ -210,7 +199,9 @@ impl Config {
                             .ok()?;
 
                         if let Some("graphql") = url.path_segments()?.last() {
-                            url.path_segments_mut().unwrap().pop();
+                            let mut segs = url.path_segments_mut().unwrap();
+                            segs.pop();
+                            segs.push("api");
                         }
 
                         Some(Cow::Owned(url))
@@ -223,6 +214,8 @@ impl Config {
             Ok,
         )
     }
+
+    pub fn graphql_endpoint(&self) -> &Url { &self.graphql_endpoint }
 
     pub fn upload_endpoint(&self) -> Result<Url> {
         let mut url = self.hub_endpoint()?.into_owned();

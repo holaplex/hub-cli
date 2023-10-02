@@ -20,12 +20,17 @@ mod commands {
     pub mod upload_drop;
 }
 
-use anyhow::{Context, Result};
-use cli::{Opts, Subcommand, UploadSubcommand};
-use config::{Config, ConfigLocation};
+mod common {
+    pub mod concurrent;
+    pub mod metadata_json;
+    pub mod reqwest;
+    pub mod tokio;
+    pub mod toposort;
+    pub mod url_permissive;
+}
 
 fn main() {
-    match run() {
+    match entry::run() {
         Ok(()) => (),
         Err(e) => {
             println!("ERROR: {e:?}");
@@ -34,26 +39,43 @@ fn main() {
     }
 }
 
-#[inline]
-fn read(config: impl FnOnce(bool) -> Result<ConfigLocation>) -> Result<Config> {
-    config(false)?.load()
-}
+mod entry {
+    use anyhow::Result;
 
-fn runtime() -> Result<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .context("Error initializing async runtime")
-}
+    use crate::{
+        cache::CacheConfig,
+        cli::{log_color, Opts, Subcommand, UploadSubcommand},
+        commands::{config, upload_drop},
+        config::{Config, ConfigLocation},
+    };
 
-fn run() -> Result<()> {
-    let Opts { config, subcmd } = clap::Parser::parse();
-    let config = |w| ConfigLocation::new(config, w);
+    #[inline]
+    fn read(config: impl FnOnce(bool) -> Result<ConfigLocation>) -> Result<Config> {
+        config(false)?.load()
+    }
 
-    match subcmd {
-        Subcommand::Config(c) => commands::config::run(&config(true)?, c),
-        Subcommand::Upload(u) => match u.subcmd {
-            UploadSubcommand::Drop(d) => commands::upload_drop::run(&read(config)?, d),
-        },
+    pub fn run() -> Result<()> {
+        let Opts {
+            log_level,
+            color,
+            config,
+            cache,
+            subcmd,
+        } = clap::Parser::parse();
+
+        env_logger::builder()
+            .parse_filters(&log_level)
+            .write_style(log_color(color))
+            .init();
+
+        let config = |w| ConfigLocation::new(config, w);
+        let cache = CacheConfig::new(cache);
+
+        match subcmd {
+            Subcommand::Config(c) => config::run(&config(true)?, c),
+            Subcommand::Upload(u) => match u.subcmd {
+                UploadSubcommand::Drop(d) => upload_drop::run(&read(config)?, cache, d),
+            },
+        }
     }
 }
