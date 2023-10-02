@@ -55,7 +55,12 @@ where T::Err: fmt::Display {
 }
 
 fn graphql_endpoint(config: &mut Config, endpoint: ConfigGraphqlEndpoint) -> Result<()> {
-    let ConfigGraphqlEndpoint { endpoint } = endpoint;
+    let ConfigGraphqlEndpoint { get, endpoint } = endpoint;
+
+    if get {
+        println!("{}", config.graphql_endpoint());
+        return Ok(());
+    }
 
     let endpoint = if let Some(e) = endpoint {
         e.parse().context("Invalid endpoint URL")?
@@ -69,7 +74,21 @@ fn graphql_endpoint(config: &mut Config, endpoint: ConfigGraphqlEndpoint) -> Res
 }
 
 fn hub_endpoint(config: &mut Config, endpoint: ConfigHubEndpoint) -> Result<()> {
-    let ConfigHubEndpoint { reset, endpoint } = endpoint;
+    let ConfigHubEndpoint {
+        get,
+        reset,
+        endpoint,
+    } = endpoint;
+
+    if get {
+        println!(
+            "{}",
+            config
+                .hub_endpoint()
+                .context("Error computing root Hub endpoint from GraphQL endpoint")?
+        );
+        return Ok(());
+    }
 
     let endpoint = if reset {
         None

@@ -190,7 +190,7 @@ pub fn run(config: &Config, cache: CacheConfig, args: UploadDrop) -> Result<()> 
         .context("Error seeding initial job queue")?;
     }
 
-    info!("Scanning {} JSON files(s)...", rx.len());
+    info!("Scanning {} JSON file(s)...", rx.len());
 
     let ctx = Context {
         cache_config: cache,
@@ -208,10 +208,14 @@ pub fn run(config: &Config, cache: CacheConfig, args: UploadDrop) -> Result<()> 
         stats: Arc::default(),
     };
 
+    let mut any_errs = false;
     runtime()?.block_on(async move {
         let res = concurrent::try_run(
             jobs.into(),
-            |e| error!("{e:?}"),
+            |e| {
+                error!("{e:?}");
+                any_errs = true;
+            },
             || {
                 let job = match rx.try_recv() {
                     Ok(j) => Some(j),
@@ -243,6 +247,13 @@ pub fn run(config: &Config, cache: CacheConfig, args: UploadDrop) -> Result<()> 
             assets = uploaded_assets.load(std::sync::atomic::Ordering::Relaxed),
             mints = queued_mints.load(std::sync::atomic::Ordering::Relaxed)
         );
+
+        if any_errs {
+            warn!(
+                "Some files were skipped due to errors.  They will be processed next time this \
+                 command is run."
+            );
+        }
 
         res
     })?;

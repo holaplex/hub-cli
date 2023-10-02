@@ -111,22 +111,34 @@ pub enum ConfigSubcommand {
 /// Options for hub config graphql-endpoint
 #[derive(clap::Args)]
 pub struct ConfigGraphqlEndpoint {
+    /// Print the current GraphQL API endpoint
+    #[arg(long)]
+    pub get: bool,
+
     /// Specify the GraphQL API endpoint, required if not using a terminal,
     /// otherwise STDIN is used as the default
-    #[arg(required = !std::io::stdin().is_terminal())]
+    #[arg(required = !std::io::stdin().is_terminal(), conflicts_with("get"))]
     pub endpoint: Option<String>,
 }
 
 /// Options for hub config hub-endpoint
 #[derive(clap::Args)]
 pub struct ConfigHubEndpoint {
+    /// Print the current root Hub endpoint
+    #[arg(long)]
+    pub get: bool,
+
     /// Reset the endpoint override and infer it from the GraphQL API endpoint
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with("get"))]
     pub reset: bool,
 
     /// Override the root Hub endpoint, required if not using a terminal,
     /// otherwise STDIN is used as the default
-    #[arg(required = !std::io::stdin().is_terminal(), conflicts_with("reset"))]
+    #[arg(
+        required = !std::io::stdin().is_terminal(),
+        conflicts_with("get"),
+        conflicts_with("reset"),
+    )]
     pub endpoint: Option<String>,
 }
 
