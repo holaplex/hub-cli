@@ -10,8 +10,27 @@ shell scripts or directly from a terminal.
 
 <!-- TODO: add better install instructions here -->
 
-To install `hub`, the only prerequisite you'll need is a Rust toolchain with
-Cargo.
+### Prerequisites
+To install `hub`, you'll need a Rust toolchain with Cargo, `clang`, and a copy
+of the `protoc` Protobuf compiler.  Additionally on POSIX systems you'll need
+`pkg-config`, include files for OpenSSL, and on Linux the include files for
+`liburing`.
+
+The recommended way to install Cargo is [via rustup](https://rustup.org/).
+
+On Debian-based Linux distributions, the additional dependencies can be
+installed with APT:
+
+```sh
+$ sudo apt install clang libssl-dev pkg-config protobuf-compiler liburing-dev
+```
+
+On macOS the additional dependencies can be installed with Homebrew:
+
+```sh
+$ brew install clang openssl@1.1 pkg-config protobuf
+$ brew info openssl@1.1 # follow the instruction to setup your terminal profile
+```
 
 To install `hub` from Git, simply check out the repo with `git clone`, and then
 install it with the `--path` flag for `cargo install`:
