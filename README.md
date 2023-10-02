@@ -10,8 +10,16 @@ shell scripts or directly from a terminal.
 
 <!-- TODO: add better install instructions here -->
 
-To install `hub`, the only prerequisite you'll need is a Rust toolchain with
+### Prerequisites
+To install `hub`, you'll need is a Rust toolchain with
 Cargo.
+
+Additionally, on MacOS, you'll need:
+```sh
+$ brew install cmake gcc openssl@1.1 pkg-config protobuf
+$ brew info openssl@1.1 # follow the instruction to setup your terminal profile
+```
+
 
 To install `hub` from Git, simply check out the repo with `git clone`, and then
 install it with the `--path` flag for `cargo install`:
