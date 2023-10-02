@@ -37,7 +37,7 @@ use crate::{
         metadata_json::{self, MetadataJson},
         tokio::runtime,
         toposort::{Dependencies, Dependency, PendingFail},
-        url_permissive::PermissiveUrl,
+        url_permissive::PermissiveUrl, reqwest::ResponseExt,
     },
     config::Config,
 };
@@ -507,9 +507,7 @@ impl UploadAssetJob {
                     )
                     .send()
                     .await
-                    .with_context(|| format!("Error sending POST request for {path:?}"))?
-                    .error_for_status()
-                    .with_context(|| format!("POST request for {path:?} returned an error"))?
+                    .error_for_hub_status(|| format!("POST request for {path:?}"))?
                     .json::<UploadResponse>()
                     .await
                     .with_context(|| {
@@ -676,11 +674,7 @@ impl QueueJsonJob {
                 .json(&QueueMintToDrop::build_query(input))
                 .send()
                 .await
-                .with_context(|| format!("Error sending queueMintToDrop mutation for {path:?}"))?
-                .error_for_status()
-                .with_context(|| {
-                    format!("queueMintToDrop mutation for {path:?} returned an error")
-                })?
+                .error_for_hub_status(|| format!("queueMintToDrop mutation for {path:?}"))?
                 .json::<graphql_client::Response<<QueueMintToDrop as GraphQLQuery>::ResponseData>>()
                 .await
                 .with_context(|| {

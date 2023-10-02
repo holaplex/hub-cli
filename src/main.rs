@@ -23,6 +23,7 @@ mod commands {
 mod common {
     pub mod concurrent;
     pub mod metadata_json;
+    pub mod reqwest;
     pub mod tokio;
     pub mod toposort;
     pub mod url_permissive;
