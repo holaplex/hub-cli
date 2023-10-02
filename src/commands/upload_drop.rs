@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, OnceLock,
+        Arc,
     },
 };
 
@@ -35,9 +35,10 @@ use crate::{
     common::{
         concurrent,
         metadata_json::{self, MetadataJson},
+        reqwest::ResponseExt,
         tokio::runtime,
         toposort::{Dependencies, Dependency, PendingFail},
-        url_permissive::PermissiveUrl, reqwest::ResponseExt,
+        url_permissive::PermissiveUrl,
     },
     config::Config,
 };
@@ -284,13 +285,12 @@ impl Context {
         Ok((*entry).clone())
     }
 
-    fn resolve_file<F: FnMut(&PathBuf) -> io::Result<T>, T>(
-        &self,
+    fn resolve_file<'a, F: FnMut(&PathBuf) -> io::Result<T>, T>(
+        &'a self,
+        dir: &'a PathBuf,
         mut open: F,
     ) -> Result<Option<(&PathBuf, T)>, (&PathBuf, io::Error)> {
-        static NIL: OnceLock<PathBuf> = OnceLock::new();
-
-        [NIL.get_or_init(PathBuf::new)]
+        [dir]
             .into_iter()
             .chain(&*self.include_dirs)
             .find_map(|d| {
@@ -336,7 +336,7 @@ impl ScanJsonJob {
                     trace!("{url:?} -> {:?}", url.to_file_path());
                     let path = url.to_file_path()?;
                     let (include_dir, file) = match ctx
-                        .resolve_file(|d| File::open(d.join(&path)))
+                        .resolve_file(&dir, |d| File::open(d.join(&path)))
                         .map_err(|(d, e)| {
                             anyhow::Error::new(e)
                                 .context(format!("Error opening {:?}", d.join(&path)))
