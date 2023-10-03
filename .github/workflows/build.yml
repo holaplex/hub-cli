@@ -114,9 +114,10 @@ jobs:
           lfs: true
       - uses: actions/download-artifact@v3
 
-      - name: Move binaries
+      - name: debug ls
         run: |
-          cp -r ~/work/hub-cli/hub-cli/hub-cli* .
+          pwd
+          ls
 
       - name: Release
         uses: softprops/action-gh-release@v1
