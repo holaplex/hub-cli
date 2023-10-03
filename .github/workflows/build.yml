@@ -65,7 +65,7 @@ jobs:
       - name: Install dependencies windows
         if: startsWith(matrix.os, 'windows')
         run: |
-            choco install cmake mingw openssl pkgconfiglite protoc
+            choco install cmake openssl protoc
 
 
       - name: Get protoc from github releases
