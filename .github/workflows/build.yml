@@ -106,6 +106,7 @@ jobs:
           name: ${{ env.REPOSITORY }}-${{ matrix.target }}
           path: ./target/release/${{ env.REPOSITORY }}${{ matrix.suffix }}
           if-no-files-found: error
+
   release:
     needs:
       - build
@@ -116,6 +117,11 @@ jobs:
           lfs: true
       - uses: actions/download-artifact@v3
 
+      - name: Move binaries
+        run: |
+          mv ~/work/hub-cli/hub-cli/* .
+          ls
+
       - name: Release
         uses: softprops/action-gh-release@v1
         env:
@@ -125,7 +131,7 @@ jobs:
           draft: true
           fail_on_unmatched_files: true
           files: |
-            ./${{ env.REPOSITORY }}/${{ env.REPOSITORY }}-x86_64-apple-darwin
-            ./${{ env.REPOSITORY }}/${{ env.REPOSITORY }}-x86_64-unknown-linux-gnu
-            ./${{ env.REPOSITORY }}/${{ env.REPOSITORY }}-x86_64-pc-windows-msvc
-            ./${{ env.REPOSITORY }}/${{ env.REPOSITORY }}-aarch64-apple-darwin
+            ${{ env.REPOSITORY }}-x86_64-apple-darwin
+            ${{ env.REPOSITORY }}-x86_64-unknown-linux-gnu
+            ${{ env.REPOSITORY }}-x86_64-pc-windows-msvc
+            ${{ env.REPOSITORY }}-aarch64-apple-darwin
