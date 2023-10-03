@@ -116,8 +116,7 @@ jobs:
 
       - name: Move binaries
         run: |
-          cp ~/work/hub-cli/hub-cli/hub-cli* .
-          ls hub-cli*
+          cp -r ~/work/hub-cli/hub-cli/hub-cli* .
 
       - name: Release
         uses: softprops/action-gh-release@v1
