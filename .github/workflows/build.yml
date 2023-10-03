@@ -123,6 +123,7 @@ jobs:
         run: |
           ls -al
           file hub-cli-aarch64-apple-darwin
+          ls -al hub-cli-aarch64-apple-darwin
 
       - name: Release
         uses: softprops/action-gh-release@v1
