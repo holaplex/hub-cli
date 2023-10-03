@@ -1,0 +1,99 @@
+name: Test, build and release binary
+on:
+  push:
+    branches:
+     #- main
+      - mpw/bin-release
+  pull_request: null
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REPOSITORY: ${{ github.event.repository.name }}
+
+jobs:
+  build:
+    runs-on: '${{ matrix.os }}'
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            suffix: ''
+          - os: macos-latest-xlarge
+            target: aarch64-apple-darwin
+            suffix: ''
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: ''
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: .exe
+    steps:
+      - uses: actions/checkout@master
+        with:
+          lfs: true
+      - uses: actions/download-artifact@master
+        with:
+          name: version
+      - id: get_version
+        run: echo ::set-output "name=VERSION::$(IFS=\=;cat Cargo.toml | grep version | head -n1 | awk {'print $3'})"
+        shell: bash
+      - uses: actions/cache@v1
+        with:
+          path: ~/.cargo/registry
+          key: '${{ runner.os }}-cargo-registry-${{ hashFiles(''**/Cargo.lock'') }}'
+      - uses: actions/cache@v1
+        with:
+          path: ~/.cargo/git
+          key: '${{ runner.os }}-cargo-index-${{ hashFiles(''**/Cargo.lock'') }}'
+      - uses: actions/cache@v1
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        env:
+          VERSION: '${{ steps.get_version.outputs.VERSION }}'
+        with:
+          command: build
+          args: '--release'
+      - uses: actions/upload-artifact@master
+        with:
+          name: ${{ env.REPOSITORY }}-${{ matrix.target }}
+          path: ./target/release/${{ env.REPOSITORY }}${{ matrix.suffix }}
+  release:
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+        with:
+          lfs: true
+      - uses: actions/download-artifact@master
+        with:
+          name: ${{ env.REPOSITORY }}-${{ matrix.target }}
+          path: ./${{ matrix.target }}
+      - id: create_release
+        uses: actions/create-release@v1.0.0
+        env:
+          GITHUB_TOKEN: '${{ secrets.ACTIONS_TOKEN }}'
+        with:
+          tag_name: ${{ steps.get_version.outputs.VERSION }}
+          release_name: Release ${{ steps.get_version.outputs.VERSION}}
+          draft: false
+          prerelease: false
+      - uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: '${{ secrets.ACTIONS_TOKEN }}'
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./${{ matrix.target }}/${{ env.REPOSITORY }}
+          asset_name: ${{ env.REPOSITORY }}-${{ matrix.target }}
+          asset_content_type: application/octet-stream
