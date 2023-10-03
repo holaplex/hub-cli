@@ -99,7 +99,7 @@ jobs:
 
       - name: Rename binary
         run: |
-          mv ./target/release/${{ env.BINARY_NAME }}${{matrix.suffix}} ./target/release/${{ env.REPOSITORY }}${{ matrix.suffix }}
+          cp ./target/release/${{ env.BINARY_NAME }}${{matrix.suffix}} ./target/release/${{ env.REPOSITORY }}${{ matrix.suffix }}
 
       - uses: actions/upload-artifact@master
         with:
