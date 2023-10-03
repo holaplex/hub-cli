@@ -1,0 +1,134 @@
+name: Build and release binary
+on:
+  push:
+    branches:
+     - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REPOSITORY: ${{ github.event.repository.name }}
+  BINARY_NAME: hub
+
+jobs:
+  build:
+    runs-on: '${{ matrix.os }}'
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            suffix: ''
+          - os: macos-latest-xlarge
+            target: aarch64-apple-darwin
+            suffix: ''
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: ''
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: .exe
+    steps:
+      - uses: actions/checkout@master
+        with:
+          lfs: true
+      - id: get_version
+        run: echo ::set-output "name=VERSION::$(IFS=\=;cat Cargo.toml | grep version | head -n1 | awk {'print $3'})"
+        shell: bash
+
+      - name: Install dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+            sudo apt-get update -y && \
+            sudo apt-get install -y --no-install-recommends \
+              cmake \
+              clang \
+              liburing-dev \
+              g++ \
+              libsasl2-dev \
+              libssl-dev \
+              libudev-dev \
+              pkg-config
+
+      - name: Install dependencies
+        if: startsWith(matrix.os, 'macOS')
+        run: |
+            brew install cmake gcc openssl@1.1 pkg-config protobuf
+
+      - name: Install dependencies windows
+        if: startsWith(matrix.os, 'windows')
+        run: |
+            choco install cmake openssl protoc
+
+
+      - name: Get protoc from github releases
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo ./ci/get-protoc.sh
+
+      - uses: actions/cache@v1
+        with:
+          path: ~/.cargo/registry
+          key: '${{ runner.os }}-${{ matrix.target }}-cargo-registry-${{ hashFiles(''**/Cargo.lock'') }}'
+      - uses: actions/cache@v1
+        with:
+          path: ~/.cargo/git
+          key: '${{ runner.os }}-${{ matrix.target }}-cargo-index-${{ hashFiles(''**/Cargo.lock'') }}'
+      - uses: actions/cache@v1
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        env:
+          VERSION: '${{ steps.get_version.outputs.VERSION }}'
+        with:
+          command: build
+          args: '--release'
+
+      - name: Rename binary
+        run: |
+          cp ./target/release/${{ env.BINARY_NAME }}${{matrix.suffix}} ./target/release/${{ env.REPOSITORY }}${{ matrix.suffix }}
+
+      - uses: actions/upload-artifact@v2
+        with:
+          name: ${{ env.REPOSITORY }}-${{ matrix.target }}
+          path: ./target/release/${{ env.REPOSITORY }}${{ matrix.suffix }}
+          if-no-files-found: error
+
+  release:
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+        with:
+          lfs: true
+      - uses: actions/download-artifact@v3
+
+      - name: Move binaries
+        run: |
+            mv ${{ env.REPOSITORY }}-x86_64-apple-darwin/${{ env.REPOSITORY }} hub-x86_64-apple-darwin
+            mv ${{ env.REPOSITORY }}-x86_64-unknown-linux-gnu/${{ env.REPOSITORY }} hub-x86_64-unknown-linux-gnu
+            mv ${{ env.REPOSITORY }}-x86_64-pc-windows-msvc/${{ env.REPOSITORY }}.exe hub-x86_64-pc-windows.exe
+            mv ${{ env.REPOSITORY }}-aarch64-apple-darwin/${{ env.REPOSITORY }} hub-aarch64-apple-darwin
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_TOKEN }}
+        with:
+          generate_release_notes: true
+          draft: true
+          fail_on_unmatched_files: true
+          files: |
+            hub-x86_64-apple-darwin
+            hub-x86_64-unknown-linux-gnu
+            hub-x86_64-pc-windows.exe
+            hub-aarch64-apple-darwin
