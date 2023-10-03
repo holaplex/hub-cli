@@ -49,6 +49,7 @@ jobs:
             sudo apt-get install -y --no-install-recommends \
               cmake \
               clang \
+              liburing-dev \
               g++ \
               libsasl2-dev \
               libssl-dev \
@@ -94,10 +95,15 @@ jobs:
         with:
           command: build
           args: '--release'
+
+      - name: Rename binary
+        run: |
+          mv ./target/release/hub ./target/release/${{ env.REPOSITORY }}${{ matrix.suffix }}
+
       - uses: actions/upload-artifact@master
         with:
           name: ${{ env.REPOSITORY }}-${{ matrix.target }}
-          path: ./target/${{ matrix.target}}/${{ env.REPOSITORY }}${{ matrix.suffix }}
+          path: ./target/release/${{ env.REPOSITORY }}${{ matrix.suffix }}
   release:
     needs:
       - build
