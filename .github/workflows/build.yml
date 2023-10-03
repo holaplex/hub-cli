@@ -43,7 +43,7 @@ jobs:
         run: echo "OS is ${{ matrix.os }}"
 
       - name: Install dependencies
-        if: ${{ matrix.os }} == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
             sudo apt-get update -y && \
             sudo apt-get install -y --no-install-recommends \
@@ -55,18 +55,18 @@ jobs:
               pkg-config
 
       - name: Install dependencies
-        if: ${{ matrix.os == 'macos-latest' || matrix.os == 'macos-latest-xlarge' }}
+        if: startsWith(matrix.os, 'macOS')
         run: |
             brew install cmake gcc openssl@1.1 pkg-config protobuf
 
       - name: Install dependencies windows
-        if: ${{ matrix.os }} == 'windows-latest'
+        if: startsWith(matrix.os, 'windows')
         run: |
             choco install cmake mingw openssl pkgconfiglite protoc
 
 
       - name: Get protoc from github releases
-        if: ${{ matrix.os }} == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo ./ci/get-protoc.sh
 
