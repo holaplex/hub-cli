@@ -119,6 +119,11 @@ jobs:
           pwd
           ls
 
+      - name: Debugging
+        run: |
+          ls -al
+          file hub-cli-aarch64-apple-darwin
+
       - name: Release
         uses: softprops/action-gh-release@v1
         env:
