@@ -101,51 +101,31 @@ jobs:
         run: |
           cp ./target/release/${{ env.BINARY_NAME }}${{matrix.suffix}} ./target/release/${{ env.REPOSITORY }}${{ matrix.suffix }}
 
-      - uses: actions/upload-artifact@master
+      - uses: actions/upload-artifact@v2
         with:
           name: ${{ env.REPOSITORY }}-${{ matrix.target }}
           path: ./target/release/${{ env.REPOSITORY }}${{ matrix.suffix }}
+          if-no-files-found: error
   release:
     needs:
       - build
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            suffix: ''
-          - os: macos-latest-xlarge
-            target: aarch64-apple-darwin
-            suffix: ''
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            suffix: ''
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            suffix: .exe
     steps:
       - uses: actions/checkout@master
         with:
           lfs: true
-      - uses: actions/download-artifact@master
-        with:
-          name: ${{ env.REPOSITORY }}-${{ matrix.target }}
-          path: ./${{ matrix.target }}
-      - id: create_release
-        uses: actions/create-release@v1.0.0
+      - uses: actions/download-artifact@v3
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
         env:
-          GITHUB_TOKEN: '${{ secrets.ACTIONS_TOKEN }}'
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_TOKEN }}
         with:
-          tag_name: '${{ steps.get_version.outputs.VERSION || ''0.1.0'' }}'
-          release_name: Release ${{ steps.get_version.outputs.VERSION}}
-          draft: false
-          prerelease: false
-      - uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: '${{ secrets.ACTIONS_TOKEN }}'
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./${{ matrix.target }}/${{ env.REPOSITORY }}
-          asset_name: ${{ env.REPOSITORY }}-${{ matrix.target }}
-          asset_content_type: application/octet-stream
+          generate_release_notes: true
+          draft: true
+          fail_on_unmatched_files: true
+          files: |
+            ${{ env.REPOSITORY }}-x86_64-apple-darwin
+            ${{ env.REPOSITORY }}-x86_64-unknown-linux-gnu
+            ${{ env.REPOSITORY }}-x86_64-pc-windows-msvc
+            ${{ env.REPOSITORY }}-aarch64-apple-darwin
