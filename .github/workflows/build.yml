@@ -51,11 +51,6 @@ jobs:
               libudev-dev \
               pkg-config
 
-      - name: Get protoc from github releases
-        if: ${{ matrix.os }} == ubuntu-latest
-        run: |
-          sudo ./ci/get-protoc.sh
-
       - name: Install dependencies
         if: ${{ matrix.os == 'macos-latest' || matrix.os == 'macos-latest-xlarge' }}
         run: |
