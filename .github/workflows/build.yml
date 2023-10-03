@@ -35,9 +35,6 @@ jobs:
       - uses: actions/checkout@master
         with:
           lfs: true
-      - uses: actions/download-artifact@master
-        with:
-          name: version
       - id: get_version
         run: echo ::set-output "name=VERSION::$(IFS=\=;cat Cargo.toml | grep version | head -n1 | awk {'print $3'})"
         shell: bash
