@@ -38,6 +38,40 @@ jobs:
       - id: get_version
         run: echo ::set-output "name=VERSION::$(IFS=\=;cat Cargo.toml | grep version | head -n1 | awk {'print $3'})"
         shell: bash
+
+      - name: Install dependencies
+        if: ${{ matrix.os }} == ubuntu-latest
+        run: |
+            sudo apt-get update -y && \
+            sudo apt-get install -y --no-install-recommends \
+              cmake \
+              g++ \
+              libsasl2-dev \
+              libssl-dev \
+              libudev-dev \
+              pkg-config
+
+      - name: Get protoc from github releases
+        if: ${{ matrix.os }} == ubuntu-latest
+        run: |
+          sudo ./ci/get-protoc.sh
+
+      - name: Install dependencies
+        if: ${{ matrix.os == 'macos-latest' || matrix.os == 'macos-latest-xlarge' }}
+        run: |
+            brew install cmake gcc openssl@1.1 pkg-config protobuf
+
+      - name: Install dependencies windows
+        if: ${{ matrix.os }} == windows-latest
+        run: |
+            choco install cmake mingw openssl pkgconfiglite protoc
+
+
+      - name: Get protoc from github releases
+        if: ${{ matrix.os }} == ubuntu-latest
+        run: |
+          sudo ./ci/get-protoc.sh
+
       - uses: actions/cache@v1
         with:
           path: ~/.cargo/registry
