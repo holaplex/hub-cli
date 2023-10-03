@@ -114,16 +114,12 @@ jobs:
           lfs: true
       - uses: actions/download-artifact@v3
 
-      - name: debug ls
+      - name: Move binaries
         run: |
-          pwd
-          ls
-
-      - name: Debugging
-        run: |
-          ls -al
-          file hub-cli-aarch64-apple-darwin
-          ls -al hub-cli-aarch64-apple-darwin
+            mv ${{ env.REPOSITORY }}-x86_64-apple-darwin/${{ env.REPOSITORY }} hub-x86_64-apple-darwin
+            mv ${{ env.REPOSITORY }}-x86_64-unknown-linux-gnu/${{ env.REPOSITORY }} hub-x86_64-unknown-linux-gnu
+            mv ${{ env.REPOSITORY }}-x86_64-pc-windows-msvc/${{ env.REPOSITORY }}.exe hub-x86_64-pc-windows.exe
+            mv ${{ env.REPOSITORY }}-aarch64-apple-darwin/${{ env.REPOSITORY }} hub-aarch64-apple-darwin
 
       - name: Release
         uses: softprops/action-gh-release@v1
@@ -134,7 +130,7 @@ jobs:
           draft: true
           fail_on_unmatched_files: true
           files: |
-            hub-cli-aarch64-apple-darwin
-            hub-cli-x86_64-apple-darwin
-            hub-cli-x86_64-pc-windows-msvc
-            hub-cli-x86_64-unknown-linux-gnu
+            hub-x86_64-apple-darwin
+            hub-x86_64-unknown-linux-gnu
+            hub-x86_64-pc-windows.exe
+            hub-aarch64-apple-darwin
