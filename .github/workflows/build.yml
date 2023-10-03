@@ -2,8 +2,7 @@ name: Build and release binary
 on:
   push:
     branches:
-     #- main
-      - mpw/bin-release
+     - main
   pull_request: null
 
 concurrency:
