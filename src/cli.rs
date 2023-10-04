@@ -84,6 +84,7 @@ pub enum Subcommand {
     Config(Config),
     /// Upload files to Hub
     Upload(Upload),
+    Airdrop(Airdrop),
 }
 
 /// Options for hub config
@@ -148,6 +149,25 @@ pub struct Upload {
     /// Name of the subcommand to run
     #[command(subcommand)]
     pub subcmd: UploadSubcommand,
+}
+
+/// Options for hub upload
+#[derive(clap::Args)]
+pub struct Airdrop {
+    #[arg(short = 'd', long = "drop")]
+    pub drop_id: Uuid,
+
+    #[arg(short = 'w')]
+    pub wallets: PathBuf,
+
+    #[arg(short = 'c', default_value = "true")]
+    pub compressed: bool,
+
+    #[arg(short = 'n', default_value = "1")]
+    pub mints_per_wallet: u32,
+
+    #[arg(short = 'j', default_value = "8")]
+    pub jobs: usize,
 }
 
 /// Subcommands for hub upload

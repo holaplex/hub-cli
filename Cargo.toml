@@ -36,6 +36,7 @@ toml = { version = "0.8.0", features = ["preserve_order"] }
 url = { version = "2.4.1", features = ["serde"] }
 uuid = { version = "1.4.1", features = ["serde"] }
 xxhash-rust = { version = "0.8.7", features = ["xxh3", "const_xxh3"] }
+bs58 = "0.5"
 
 [build-dependencies]
 prost-build = "0.12.1"

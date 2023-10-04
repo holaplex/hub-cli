@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    fmt::Write,
     fs::{self, File},
     io::{self, prelude::*},
     iter,
@@ -34,6 +33,7 @@ use crate::{
     cli::UploadDrop,
     common::{
         concurrent,
+        error::format_errors,
         metadata_json::{self, MetadataJson},
         reqwest::ResponseExt,
         tokio::runtime,
@@ -566,26 +566,6 @@ struct QueueJsonJob {
 }
 
 impl QueueJsonJob {
-    fn format_errors<T>(
-        errors: Option<Vec<graphql_client::Error>>,
-        ok: T,
-        f: impl FnOnce(String) -> T,
-    ) -> T {
-        let mut errs = errors.into_iter().flatten().peekable();
-
-        if errs.peek().is_some() {
-            let mut s = String::new();
-
-            for err in errs {
-                write!(s, "\n  {err}").unwrap();
-            }
-
-            f(s)
-        } else {
-            ok
-        }
-    }
-
     fn rewrite_json(json: &mut MetadataJson, rewrites: Option<Arc<ArrayQueue<FileRewrite>>>) {
         let rewrites: HashMap<_, _> = rewrites
             .into_iter()
@@ -685,7 +665,7 @@ impl QueueJsonJob {
 
                 let collection_mint;
                 if let Some(data) = res.data {
-                    Self::format_errors(res.errors, (), |s| {
+                    format_errors(res.errors, (), |s| {
                         warn!(
                             "queueMintToDrop mutation for {path:?} returned one or more errors:{s}"
                         );
@@ -705,7 +685,7 @@ impl QueueJsonJob {
                     ctx.stats.queued_mints.fetch_add(1, Ordering::Relaxed);
                     info!("Mint successfully queued for {path:?}");
                 } else {
-                    Self::format_errors(res.errors, Ok(()), |s| {
+                    format_errors(res.errors, Ok(()), |s| {
                         bail!(
                             "queueMintToDrop mutation for {path:?} returned one or more errors:{s}"
                         )

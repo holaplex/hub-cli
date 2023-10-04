@@ -1,0 +1,8 @@
+mutation MintRandomQueuedToDrop($in: MintRandomQueuedInput!) {
+  mintRandomQueuedToDrop(input: $in) {
+    collectionMint {
+      id
+      creationStatus
+    }
+  }
+}

@@ -16,12 +16,14 @@ mod cli;
 mod config;
 
 mod commands {
+    pub mod airdrop;
     pub mod config;
     pub mod upload_drop;
 }
 
 mod common {
     pub mod concurrent;
+    pub mod error;
     pub mod metadata_json;
     pub mod reqwest;
     pub mod tokio;
@@ -45,7 +47,7 @@ mod entry {
     use crate::{
         cache::CacheConfig,
         cli::{log_color, Opts, Subcommand, UploadSubcommand},
-        commands::{config, upload_drop},
+        commands::{airdrop, config, upload_drop},
         config::{Config, ConfigLocation},
     };
 
@@ -69,13 +71,14 @@ mod entry {
             .init();
 
         let config = |w| ConfigLocation::new(config, w);
-        let cache = CacheConfig::new(cache);
+        let cache: CacheConfig = CacheConfig::new(cache);
 
         match subcmd {
             Subcommand::Config(c) => config::run(&config(true)?, c),
             Subcommand::Upload(u) => match u.subcmd {
                 UploadSubcommand::Drop(d) => upload_drop::run(&read(config)?, cache, d),
             },
+            Subcommand::Airdrop(a) => airdrop::run(&read(config)?, cache, a),
         }
     }
 }

@@ -22,9 +22,10 @@ use crate::cli::CacheOpts;
 mod proto {
     include!(concat!(env!("OUT_DIR"), "/cache.asset_uploads.rs"));
     include!(concat!(env!("OUT_DIR"), "/cache.drop_mints.rs"));
+    include!(concat!(env!("OUT_DIR"), "/cache.mint_random_queued.rs"));
 }
 
-pub use proto::{AssetUpload, DropMint};
+pub use proto::{AssetUpload, CreationStatus, DropMint, MintRandomQueued as ProtoMintRandomQueued};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -378,6 +379,90 @@ impl<'a> AssetUploadCache<'a> {
                 self.0.config.write_opts(),
             )
             .with_context(|| format!("Error setting asset upload cache for {path:?}"))
+    }
+}
+
+#[repr(transparent)]
+pub struct AirdropWalletsCache<'a>(Cow<'a, Cache>);
+
+impl<'a> CacheFamily<'a> for AirdropWalletsCache<'a> {
+    type Static = AirdropWalletsCache<'static>;
+
+    const CF_NAME: &'static str = "airdrop-wallets";
+
+    #[inline]
+    fn new(cache: Cow<'a, Cache>) -> Self { Self(cache) }
+
+    #[inline]
+    fn cache(&self) -> &Cow<'a, Cache> { &self.0 }
+}
+
+impl<'a> AirdropWalletsCache<'a> {
+    pub async fn get(
+        &self,
+        path: impl AsRef<Path> + Send + 'static,
+        pubkey: String,
+    ) -> Result<Option<ProtoMintRandomQueued>> {
+        let this = self.to_static();
+        spawn_blocking(move || this.get_sync(path, pubkey))
+            .await
+            .unwrap()
+    }
+
+    pub fn get_sync(
+        &self,
+        path: impl AsRef<Path>,
+        key: String,
+    ) -> Result<Option<ProtoMintRandomQueued>> {
+        let path = path.as_ref();
+
+        let bytes = self
+            .0
+            .db
+            .get_cf_opt(
+                &self.0.get_cf(Self::CF_NAME)?,
+                key.into_bytes(),
+                self.0.config.read_opts(),
+            )
+            .with_context(|| format!("Error getting airdrop wallet for {path:?}"))?;
+
+        let Some(bytes) = bytes else { return Ok(None) };
+        let airdrop = ProtoMintRandomQueued::decode(&*bytes)
+            .with_context(|| format!("Error parsing  for {path:?} (this should not happen)"))?;
+
+        Ok(Some(airdrop))
+    }
+
+    pub async fn set(
+        &self,
+        path: impl AsRef<Path> + Send + 'static,
+        key: &'static str,
+        airdrop: ProtoMintRandomQueued,
+    ) -> Result<()> {
+        let this = self.to_static();
+        spawn_blocking(move || this.set_sync(path, key, &airdrop))
+            .await
+            .unwrap()
+    }
+
+    pub fn set_sync(
+        &self,
+        path: impl AsRef<Path>,
+        key: &str,
+        airdrop: &ProtoMintRandomQueued,
+    ) -> Result<()> {
+        let path = path.as_ref();
+        let bytes = airdrop.encode_to_vec();
+
+        self.0
+            .db
+            .put_cf_opt(
+                &self.0.get_cf(Self::CF_NAME)?,
+                key.as_bytes(),
+                bytes,
+                self.0.config.write_opts(),
+            )
+            .with_context(|| format!("Error setting for {path:?}"))
     }
 }
 
