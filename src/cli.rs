@@ -160,13 +160,13 @@ pub struct Airdrop {
     #[arg(short = 'w')]
     pub wallets: PathBuf,
 
-    #[arg(short = 'c', default_value = "true")]
+    #[arg(short = 'c', default_value_t = true)]
     pub compressed: bool,
 
-    #[arg(short = 'n', default_value = "1")]
+    #[arg(short = 'n', default_value_t = 1)]
     pub mints_per_wallet: u32,
 
-    #[arg(short = 'j', default_value = "8")]
+    #[arg(short = 'j', default_value_t = 8)]
     pub jobs: usize,
 }
 

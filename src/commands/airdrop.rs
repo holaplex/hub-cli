@@ -116,7 +116,7 @@ impl CheckMintStatus {
                     warn!("checkMintStatus mutation for {path:?} returned one or more errors:{s}");
                 });
 
-                info!("Checking status for {mint_id:?}");
+                info!("Checking status for mint {mint_id:?}");
 
                 let response = data.mint.context("Mint not found")?;
                 let mint_status::MintStatusMint {
@@ -263,7 +263,7 @@ impl MintRandomQueued {
                         key: key.clone(),
                     }))?;
 
-                    info!("Pending for {:?}", wallet);
+                    info!("Pending for wallet {wallet:?}");
                 } else {
                     format_errors(res.errors, Ok(()), |s| {
                         bail!(
