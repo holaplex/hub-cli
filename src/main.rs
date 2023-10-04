@@ -71,7 +71,7 @@ mod entry {
             .init();
 
         let config = |w| ConfigLocation::new(config, w);
-        let cache: CacheConfig = CacheConfig::new(cache);
+        let cache = CacheConfig::new(cache);
 
         match subcmd {
             Subcommand::Config(c) => config::run(&config(true)?, c),

@@ -206,18 +206,17 @@ impl MintRandomQueued {
                 let wallet = key.split_once(':').unwrap().0;
                 match status {
                     CreationStatus::Created => {
-                        ctx.stats.created_mints.fetch_add(1, Ordering::Relaxed);
                         info!("Mint {:?} already airdropped to {wallet:?}", r.mint_id,);
                         return Ok(());
                     },
-                    CreationStatus::Failed | CreationStatus::Pending => {
-                        ctx.stats.pending_mints.fetch_add(1, Ordering::Relaxed);
+                    CreationStatus::Failed => {
+                        //retry here
 
-                        info!(
-                            "Mint {:?} status = {:?}. Checking status again...",
-                            r.mint_id,
-                            status.as_str_name()
-                        );
+                        info!("Mint {:?} failed. retrying..", r.mint_id,);
+                    },
+
+                    CreationStatus::Pending => {
+                        info!("Mint {:?} is pending. Checking status again...", r.mint_id,);
                         ctx.q.send(Job::CheckStatus(CheckMintStatus {
                             path,
                             mint_id: r.mint_id.parse()?,

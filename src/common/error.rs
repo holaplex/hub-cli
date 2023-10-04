@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 pub(crate) fn format_errors<T>(
     errors: Option<Vec<graphql_client::Error>>,
     ok: T,
@@ -17,4 +19,3 @@ pub(crate) fn format_errors<T>(
         ok
     }
 }
-use std::fmt::Write;
