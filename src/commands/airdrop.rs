@@ -5,6 +5,10 @@ use std::{
     io,
     io::BufRead,
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     thread::sleep,
     time::Duration,
 };
@@ -84,6 +88,13 @@ impl Job {
     }
 }
 
+#[derive(Default)]
+struct Stats {
+    pending_mints: AtomicUsize,
+    failed_mints: AtomicUsize,
+    created_mints: AtomicUsize,
+}
+
 #[derive(Debug)]
 struct CheckMintStatus {
     path: PathBuf,
@@ -129,6 +140,9 @@ impl CheckMintStatus {
                 match creation_status {
                     mint_status::CreationStatus::CREATED => {
                         info!("Mint {mint_id:?} airdropped to {wallet:?}");
+                        ctx.stats.pending_mints.fetch_sub(1, Ordering::Relaxed);
+                        ctx.stats.created_mints.fetch_add(1, Ordering::Relaxed);
+
                         cache.set_sync(path.clone(), &key, &ProtoMintRandomQueued {
                             mint_id: id.to_string(),
                             mint_address: None,
@@ -144,6 +158,7 @@ impl CheckMintStatus {
                         }))?;
                     },
                     _ => {
+                        ctx.stats.failed_mints.fetch_add(1, Ordering::Relaxed);
                         info!("Mint {mint_id:?}:? failed. retrying..");
                         cache.set_sync(path.clone(), &key, &ProtoMintRandomQueued {
                             mint_id: id.to_string(),
@@ -191,10 +206,13 @@ impl MintRandomQueued {
                 let wallet = key.split_once(':').unwrap().0;
                 match status {
                     CreationStatus::Created => {
+                        ctx.stats.created_mints.fetch_add(1, Ordering::Relaxed);
                         info!("Mint {:?} already airdropped to {wallet:?}", r.mint_id,);
                         return Ok(());
                     },
                     CreationStatus::Failed | CreationStatus::Pending => {
+                        ctx.stats.pending_mints.fetch_add(1, Ordering::Relaxed);
+
                         info!(
                             "Mint {:?} status = {:?}. Checking status again...",
                             r.mint_id,
@@ -257,6 +275,8 @@ impl MintRandomQueued {
                         status: CreationStatus::Pending.into(),
                     })?;
 
+                    ctx.stats.pending_mints.fetch_add(1, Ordering::Relaxed);
+
                     ctx.q.send(Job::CheckStatus(CheckMintStatus {
                         path,
                         mint_id: id,
@@ -271,6 +291,8 @@ impl MintRandomQueued {
                              errors:{s}"
                         )
                     })?;
+
+                    ctx.stats.failed_mints.fetch_add(1, Ordering::Relaxed);
 
                     bail!("mintRandomQueuedToDrop mutation for {path:?} returned no data");
                 }
@@ -287,6 +309,7 @@ struct Context {
     client: reqwest::Client,
     q: Sender<Job>,
     cache: Cache,
+    stats: Arc<Stats>,
 }
 
 pub fn run(config: &Config, cache: CacheConfig, args: Airdrop) -> Result<()> {
@@ -329,6 +352,7 @@ pub fn run(config: &Config, cache: CacheConfig, args: Airdrop) -> Result<()> {
         client: config.graphql_client()?,
         q: tx,
         cache: Cache::load_sync(Path::new(".airdrops").join(drop_id.to_string()), cache)?,
+        stats: Arc::default(),
     };
 
     runtime()?.block_on(async move {
@@ -359,6 +383,18 @@ pub fn run(config: &Config, cache: CacheConfig, args: Airdrop) -> Result<()> {
         .await;
 
         debug_assert!(rx.is_empty(), "Trailing jobs in queue");
+
+        let Stats {
+            created_mints,
+            pending_mints,
+            failed_mints,
+        } = &*ctx.stats;
+        info!(
+            "Created: {:?}  Pending: {:?}   Failed: {:?}",
+            created_mints.load(Ordering::Relaxed),
+            pending_mints.load(Ordering::Relaxed),
+            failed_mints.load(Ordering::Relaxed),
+        );
 
         res
     })?;
