@@ -23,9 +23,11 @@ mod commands {
 
 mod common {
     pub mod concurrent;
-    pub mod error;
+    pub mod graphql;
     pub mod metadata_json;
+    pub mod pubkey;
     pub mod reqwest;
+    pub mod stats;
     pub mod tokio;
     pub mod toposort;
     pub mod url_permissive;
@@ -75,10 +77,10 @@ mod entry {
 
         match subcmd {
             Subcommand::Config(c) => config::run(&config(true)?, c),
+            Subcommand::Airdrop(a) => airdrop::run(&read(config)?, cache, a),
             Subcommand::Upload(u) => match u.subcmd {
                 UploadSubcommand::Drop(d) => upload_drop::run(&read(config)?, cache, d),
             },
-            Subcommand::Airdrop(a) => airdrop::run(&read(config)?, cache, a),
         }
     }
 }

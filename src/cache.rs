@@ -1,7 +1,8 @@
 use std::{
-    borrow::Cow,
+    borrow::{Borrow, Cow},
     fmt,
     io::{self, prelude::*},
+    marker::PhantomData,
     path::{Path, PathBuf},
     pin::pin,
     sync::Arc,
@@ -17,15 +18,17 @@ use tokio::{
 };
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::cli::CacheOpts;
+use crate::{cli::CacheOpts, common::pubkey::Pubkey};
 
 mod proto {
+    #![allow(clippy::doc_markdown, clippy::trivially_copy_pass_by_ref)]
+
     include!(concat!(env!("OUT_DIR"), "/cache.asset_uploads.rs"));
     include!(concat!(env!("OUT_DIR"), "/cache.drop_mints.rs"));
     include!(concat!(env!("OUT_DIR"), "/cache.mint_random_queued.rs"));
 }
 
-pub use proto::{AssetUpload, CreationStatus, DropMint, MintRandomQueued as ProtoMintRandomQueued};
+pub use proto::{AssetUpload, CreationStatus, DropMint, MintRandomQueued};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -197,21 +200,26 @@ mod private {
     #[allow(clippy::wildcard_imports)]
     use super::*;
 
-    pub trait CacheFamily<'a> {
-        type Static: CacheFamily<'static>;
+    pub trait CacheFamily: Send + 'static {
+        type KeyName: ?Sized + fmt::Debug + ToOwned<Owned = Self::OwnedKeyName>;
+        type OwnedKeyName: fmt::Debug + Borrow<Self::KeyName> + Send + 'static;
+
+        type Key: ?Sized + ToOwned<Owned = Self::OwnedKey>;
+        type OwnedKey: Borrow<Self::Key> + Send + 'static;
+        type KeyBytes<'a>: AsRef<[u8]>;
+
+        type Value: ?Sized + ToOwned<Owned = Self::OwnedValue>;
+        type OwnedValue: Borrow<Self::Value> + Send + 'static;
+        type ValueBytes<'a>: AsRef<[u8]>;
+
+        type ParseError: Into<anyhow::Error>;
 
         const CF_NAME: &'static str;
+        const VALUE_NAME: &'static str;
 
-        fn new(cache: Cow<'a, Cache>) -> Self;
-
-        fn cache(&self) -> &Cow<'a, Cache>;
-
-        fn to_static(&self) -> Self::Static {
-            Self::Static::new(Cow::Owned(self.cache().as_ref().to_owned()))
-        }
-
-        #[inline]
-        fn get_cf(&'a self) -> Result<ColumnFamilyRef> { self.cache().get_cf(Self::CF_NAME) }
+        fn key_bytes(key: &Self::Key) -> Self::KeyBytes<'_>;
+        fn value_bytes(value: &Self::Value) -> Self::ValueBytes<'_>;
+        fn parse_value(bytes: Vec<u8>) -> Result<Self::OwnedValue, Self::ParseError>;
     }
 }
 
@@ -224,9 +232,11 @@ pub struct Cache {
     db: Arc<DB>,
 }
 
-// NB: Don't use the async versions unless you absolutely have to, they're
-//     going to all be slower.
+// NB: The async methods all have a bunch of overhead - they are all analogous
+//     to calling the blocking versions inside spawn_blocking, and should only
+//     be used in contexts where spawn_blocking would be otherwise required.
 
+#[allow(dead_code)]
 impl Cache {
     pub async fn load(
         path: impl AsRef<Path> + Send + 'static,
@@ -283,261 +293,260 @@ impl Cache {
         })
     }
 
-    pub async fn get<C: CacheFamily<'static> + Send + 'static>(&self) -> Result<C> {
+    pub async fn get<C: CacheFamily>(&self) -> Result<CacheRef<'static, C>> {
         let this = self.clone();
         spawn_blocking(move || {
             this.create_cf(C::CF_NAME)?;
 
-            Ok(C::new(Cow::Owned(this)))
+            Ok(CacheRef(Cow::Owned(this), PhantomData))
         })
         .await
         .unwrap()
     }
 
-    pub fn get_sync<'a, C: CacheFamily<'a>>(&'a self) -> Result<C> {
+    pub fn get_sync<C: CacheFamily>(&self) -> Result<CacheRef<C>> {
         self.create_cf(C::CF_NAME)?;
 
-        Ok(C::new(Cow::Borrowed(self)))
+        Ok(CacheRef(Cow::Borrowed(self), PhantomData))
     }
 }
 
 #[repr(transparent)]
-pub struct AssetUploadCache<'a>(Cow<'a, Cache>);
+pub struct CacheRef<'a, F>(Cow<'a, Cache>, PhantomData<F>);
 
-impl<'a> CacheFamily<'a> for AssetUploadCache<'a> {
-    type Static = AssetUploadCache<'static>;
-
-    const CF_NAME: &'static str = "asset-uploads";
+#[allow(dead_code)]
+impl<'a, F: CacheFamily> CacheRef<'a, F> {
+    #[inline]
+    fn to_static(&self) -> CacheRef<'static, F> {
+        CacheRef(Cow::Owned(self.0.as_ref().to_owned()), PhantomData)
+    }
 
     #[inline]
-    fn new(cache: Cow<'a, Cache>) -> Self { Self(cache) }
+    fn get_cf(&'a self) -> Result<ColumnFamilyRef> { self.0.get_cf(F::CF_NAME) }
 
     #[inline]
-    fn cache(&self) -> &Cow<'a, Cache> { &self.0 }
-}
-
-impl<'a> AssetUploadCache<'a> {
-    pub async fn get(
+    pub async fn get_named(
         &self,
-        path: impl AsRef<Path> + Send + 'static,
-        ck: Checksum,
-    ) -> Result<Option<AssetUpload>> {
+        name: F::OwnedKeyName,
+        key: F::OwnedKey,
+    ) -> Result<Option<F::OwnedValue>> {
         let this = self.to_static();
-        spawn_blocking(move || this.get_sync(path, ck))
+        spawn_blocking(move || this.get_named_sync(name, key))
             .await
             .unwrap()
     }
 
-    pub fn get_sync(&self, path: impl AsRef<Path>, ck: Checksum) -> Result<Option<AssetUpload>> {
-        let path = path.as_ref();
-
+    pub fn get_named_sync(
+        &self,
+        name: impl Borrow<F::KeyName>,
+        key: impl Borrow<F::Key>,
+    ) -> Result<Option<F::OwnedValue>> {
+        let name = name.borrow();
         let bytes = self
             .0
             .db
             .get_cf_opt(
-                &self.0.get_cf(Self::CF_NAME)?,
-                ck.to_bytes(),
+                &self.get_cf()?,
+                F::key_bytes(key.borrow()),
                 self.0.config.read_opts(),
             )
-            .with_context(|| format!("Error getting asset upload cache for {path:?}"))?;
+            .with_context(|| format!("Error getting {} for {name:?}", F::VALUE_NAME))?;
 
         let Some(bytes) = bytes else { return Ok(None) };
-        let upload = AssetUpload::decode(&*bytes).with_context(|| {
-            format!("Error parsing asset upload cache for {path:?} (this should not happen)")
+        let parsed = F::parse_value(bytes).map_err(Into::into).with_context(|| {
+            format!(
+                "Error parsing {} for {name:?} (this should not happen)",
+                F::VALUE_NAME
+            )
         })?;
 
-        Ok(Some(upload))
+        Ok(Some(parsed))
     }
 
-    pub async fn set(
+    #[inline]
+    pub async fn set_named(
         &self,
-        path: impl AsRef<Path> + Send + 'static,
-        ck: Checksum,
-        upload: AssetUpload,
+        name: F::OwnedKeyName,
+        key: F::OwnedKey,
+        value: F::OwnedValue,
     ) -> Result<()> {
         let this = self.to_static();
-        spawn_blocking(move || this.set_sync(path, ck, &upload))
+        spawn_blocking(move || this.set_named_sync(name, key, value))
             .await
             .unwrap()
     }
 
-    pub fn set_sync(
+    #[inline]
+    pub fn set_named_sync(
         &self,
-        path: impl AsRef<Path>,
-        ck: Checksum,
-        upload: &AssetUpload,
+        name: impl Borrow<F::KeyName>,
+        key: impl Borrow<F::Key>,
+        value: impl Borrow<F::Value>,
     ) -> Result<()> {
-        let path = path.as_ref();
-        let bytes = upload.encode_to_vec();
+        let name = name.borrow();
+        let bytes = F::value_bytes(value.borrow());
 
         self.0
             .db
             .put_cf_opt(
-                &self.0.get_cf(Self::CF_NAME)?,
-                ck.to_bytes(),
-                bytes,
+                &self.get_cf()?,
+                F::key_bytes(key.borrow()).as_ref(),
+                bytes.as_ref(),
                 self.0.config.write_opts(),
             )
-            .with_context(|| format!("Error setting asset upload cache for {path:?}"))
+            .with_context(|| format!("Error setting {} for {name:?}", F::VALUE_NAME))
     }
 }
 
-#[repr(transparent)]
-pub struct AirdropWalletsCache<'a>(Cow<'a, Cache>);
+#[allow(dead_code)]
+impl<'a, F: CacheFamily> CacheRef<'a, F>
+where F::Key: Borrow<F::KeyName>
+{
+    #[inline]
+    pub fn get_sync(&self, key: impl Borrow<F::Key>) -> Result<Option<F::OwnedValue>> {
+        let key = key.borrow();
+        self.get_named_sync(key.borrow(), key)
+    }
 
-impl<'a> CacheFamily<'a> for AirdropWalletsCache<'a> {
-    type Static = AirdropWalletsCache<'static>;
+    #[inline]
+    pub fn set_sync(&self, key: impl Borrow<F::Key>, value: impl Borrow<F::Value>) -> Result<()> {
+        let key = key.borrow();
+        self.set_named_sync(key.borrow(), key, value)
+    }
+}
+
+#[allow(dead_code)]
+impl<'a, F: CacheFamily> CacheRef<'a, F>
+where F::OwnedKey: ToOwned<Owned = F::OwnedKeyName>
+{
+    #[inline]
+    pub async fn get(&self, key: F::OwnedKey) -> Result<Option<F::OwnedValue>> {
+        self.get_named(key.to_owned(), key).await
+    }
+
+    #[inline]
+    pub async fn set(&self, key: F::OwnedKey, value: F::OwnedValue) -> Result<()> {
+        self.set_named(key.to_owned(), key, value).await
+    }
+}
+
+pub struct AirdropWalletsCacheFamily;
+pub type AirdropWalletsCache<'a> = CacheRef<'a, AirdropWalletsCacheFamily>;
+
+#[derive(Clone, Copy)]
+pub struct AirdropId {
+    pub wallet: Pubkey,
+    pub nft_number: u32,
+}
+
+impl AirdropId {
+    pub fn to_bytes(self) -> [u8; 36] {
+        let mut buf = [0_u8; 36];
+
+        let (bw, bn) = buf.split_at_mut(32);
+        bw.copy_from_slice(&self.wallet.to_bytes());
+        bn.copy_from_slice(&self.nft_number.to_le_bytes());
+
+        buf
+    }
+}
+
+impl fmt::Debug for AirdropId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { wallet, nft_number } = self;
+        write!(f, "NFT #{nft_number} for {wallet}")
+    }
+}
+
+impl CacheFamily for AirdropWalletsCacheFamily {
+    type KeyName = AirdropId;
+    type OwnedKeyName = AirdropId;
+
+    type Key = AirdropId;
+    type OwnedKey = AirdropId;
+    type KeyBytes<'a> = [u8; 36];
+
+    type Value = MintRandomQueued;
+    type OwnedValue = MintRandomQueued;
+    type ValueBytes<'a> = Vec<u8>;
+
+    type ParseError = prost::DecodeError;
 
     const CF_NAME: &'static str = "airdrop-wallets";
+    const VALUE_NAME: &'static str = "airdrop mint status";
 
     #[inline]
-    fn new(cache: Cow<'a, Cache>) -> Self { Self(cache) }
+    fn key_bytes(key: &Self::Key) -> Self::KeyBytes<'_> { key.to_bytes() }
 
     #[inline]
-    fn cache(&self) -> &Cow<'a, Cache> { &self.0 }
-}
+    fn value_bytes(value: &Self::Value) -> Self::ValueBytes<'_> { value.encode_to_vec() }
 
-impl<'a> AirdropWalletsCache<'a> {
-    pub async fn get(
-        &self,
-        path: impl AsRef<Path> + Send + 'static,
-        pubkey: String,
-    ) -> Result<Option<ProtoMintRandomQueued>> {
-        let this = self.to_static();
-        spawn_blocking(move || this.get_sync(path, pubkey))
-            .await
-            .unwrap()
-    }
-
-    pub fn get_sync(
-        &self,
-        path: impl AsRef<Path>,
-        key: String,
-    ) -> Result<Option<ProtoMintRandomQueued>> {
-        let path = path.as_ref();
-
-        let bytes = self
-            .0
-            .db
-            .get_cf_opt(
-                &self.0.get_cf(Self::CF_NAME)?,
-                key.into_bytes(),
-                self.0.config.read_opts(),
-            )
-            .with_context(|| format!("Error getting airdrop wallet for {path:?}"))?;
-
-        let Some(bytes) = bytes else { return Ok(None) };
-        let airdrop = ProtoMintRandomQueued::decode(&*bytes)
-            .with_context(|| format!("Error parsing  for {path:?} (this should not happen)"))?;
-
-        Ok(Some(airdrop))
-    }
-
-    pub async fn set(
-        &self,
-        path: impl AsRef<Path> + Send + 'static,
-        key: &'static str,
-        airdrop: ProtoMintRandomQueued,
-    ) -> Result<()> {
-        let this = self.to_static();
-        spawn_blocking(move || this.set_sync(path, key, &airdrop))
-            .await
-            .unwrap()
-    }
-
-    pub fn set_sync(
-        &self,
-        path: impl AsRef<Path>,
-        key: &str,
-        airdrop: &ProtoMintRandomQueued,
-    ) -> Result<()> {
-        let path = path.as_ref();
-        let bytes = airdrop.encode_to_vec();
-
-        self.0
-            .db
-            .put_cf_opt(
-                &self.0.get_cf(Self::CF_NAME)?,
-                key.as_bytes(),
-                bytes,
-                self.0.config.write_opts(),
-            )
-            .with_context(|| format!("Error setting for {path:?}"))
+    #[inline]
+    fn parse_value(bytes: Vec<u8>) -> Result<Self::OwnedValue, Self::ParseError> {
+        Self::OwnedValue::decode(&*bytes)
     }
 }
 
-#[repr(transparent)]
-pub struct DropMintCache<'a>(Cow<'a, Cache>);
+pub struct AssetUploadCacheFamily;
+pub type AssetUploadCache<'a> = CacheRef<'a, AssetUploadCacheFamily>;
 
-impl<'a> CacheFamily<'a> for DropMintCache<'a> {
-    type Static = DropMintCache<'static>;
+impl CacheFamily for AssetUploadCacheFamily {
+    type KeyName = Path;
+    type OwnedKeyName = PathBuf;
+
+    type Key = Checksum;
+    type OwnedKey = Checksum;
+    type KeyBytes<'a> = [u8; 16];
+
+    type Value = AssetUpload;
+    type OwnedValue = AssetUpload;
+    type ValueBytes<'a> = Vec<u8>;
+
+    type ParseError = prost::DecodeError;
+
+    const CF_NAME: &'static str = "asset-uploads";
+    const VALUE_NAME: &'static str = "asset upload";
+
+    #[inline]
+    fn key_bytes(key: &Self::Key) -> Self::KeyBytes<'_> { key.to_bytes() }
+
+    #[inline]
+    fn value_bytes(value: &Self::Value) -> Self::ValueBytes<'_> { value.encode_to_vec() }
+
+    #[inline]
+    fn parse_value(bytes: Vec<u8>) -> Result<Self::OwnedValue, Self::ParseError> {
+        Self::OwnedValue::decode(&*bytes)
+    }
+}
+
+pub struct DropMintCacheFamily;
+pub type DropMintCache<'a> = CacheRef<'a, DropMintCacheFamily>;
+
+impl CacheFamily for DropMintCacheFamily {
+    type KeyName = Path;
+    type OwnedKeyName = PathBuf;
+
+    type Key = Checksum;
+    type OwnedKey = Checksum;
+    type KeyBytes<'a> = [u8; 16];
+
+    type Value = DropMint;
+    type OwnedValue = DropMint;
+    type ValueBytes<'a> = Vec<u8>;
+
+    type ParseError = prost::DecodeError;
 
     const CF_NAME: &'static str = "drop-mints";
+    const VALUE_NAME: &'static str = "drop mint";
 
     #[inline]
-    fn new(cache: Cow<'a, Cache>) -> Self { Self(cache) }
+    fn key_bytes(key: &Self::Key) -> Self::KeyBytes<'_> { key.to_bytes() }
 
     #[inline]
-    fn cache(&self) -> &Cow<'a, Cache> { &self.0 }
-}
+    fn value_bytes(value: &Self::Value) -> Self::ValueBytes<'_> { value.encode_to_vec() }
 
-impl<'a> DropMintCache<'a> {
-    pub async fn get(
-        &self,
-        path: impl AsRef<Path> + Send + 'static,
-        ck: Checksum,
-    ) -> Result<Option<DropMint>> {
-        let this = self.to_static();
-        spawn_blocking(move || this.get_sync(path, ck))
-            .await
-            .unwrap()
-    }
-
-    pub fn get_sync(&self, path: impl AsRef<Path>, ck: Checksum) -> Result<Option<DropMint>> {
-        let path = path.as_ref();
-
-        let bytes = self
-            .0
-            .db
-            .get_cf_opt(
-                &self.0.get_cf(Self::CF_NAME)?,
-                ck.to_bytes(),
-                self.0.config.read_opts(),
-            )
-            .with_context(|| format!("Error getting asset upload cache for {path:?}"))?;
-
-        let Some(bytes) = bytes else { return Ok(None) };
-        let upload = DropMint::decode(&*bytes).with_context(|| {
-            format!("Error parsing asset upload cache for {path:?} (this should not happen)")
-        })?;
-
-        Ok(Some(upload))
-    }
-
-    pub async fn set(
-        &self,
-        path: impl AsRef<Path> + Send + 'static,
-        ck: Checksum,
-        upload: DropMint,
-    ) -> Result<()> {
-        let this = self.to_static();
-        spawn_blocking(move || this.set_sync(path, ck, &upload))
-            .await
-            .unwrap()
-    }
-
-    pub fn set_sync(&self, path: impl AsRef<Path>, ck: Checksum, upload: &DropMint) -> Result<()> {
-        let path = path.as_ref();
-        let bytes = upload.encode_to_vec();
-
-        self.0
-            .db
-            .put_cf_opt(
-                &self.0.get_cf(Self::CF_NAME)?,
-                ck.to_bytes(),
-                bytes,
-                self.0.config.write_opts(),
-            )
-            .with_context(|| format!("Error setting asset upload cache for {path:?}"))
+    #[inline]
+    fn parse_value(bytes: Vec<u8>) -> Result<Self::OwnedValue, Self::ParseError> {
+        Self::OwnedValue::decode(&*bytes)
     }
 }

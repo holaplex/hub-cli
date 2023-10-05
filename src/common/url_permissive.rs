@@ -80,8 +80,7 @@ impl<'de> Deserialize<'de> for PermissiveUrl {
             fn visit_str<E>(self, s: &str) -> Result<Self::Value, E>
             where E: de::Error {
                 PermissiveUrl::from_str(s).map_err(|err| {
-                    let err_s = format!("{}", err);
-                    de::Error::invalid_value(de::Unexpected::Str(s), &err_s.as_str())
+                    de::Error::invalid_value(de::Unexpected::Str(s), &err.to_string().as_str())
                 })
             }
         }

@@ -9,7 +9,7 @@ message MintRandomQueued {
 }
 
 enum CreationStatus {
-    Created = 0;
-    Failed = 1;
-    Pending = 2;
+  CREATED = 0;
+  FAILED = 1;
+  PENDING = 2;
 }
