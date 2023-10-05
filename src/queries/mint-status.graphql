@@ -1,0 +1,6 @@
+query MintStatus($id: UUID!) {
+  mint(id: $id) {
+    id
+    creationStatus
+  }
+}

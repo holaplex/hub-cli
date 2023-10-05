@@ -77,11 +77,21 @@ pub struct CacheOpts {
     pub cache_lru_size: usize,
 }
 
+/// Mixin options for concurrency
+#[derive(clap::Args)]
+pub struct ConcurrencyOpts {
+    /// Limit the number of concurrently-running jobs
+    #[arg(short = 'j', long = "jobs", default_value_t = 4)]
+    pub jobs: u16,
+}
+
 /// Top-level subcommands for hub
 #[derive(clap::Subcommand)]
 pub enum Subcommand {
     /// View and set configuration for the hub command
     Config(Config),
+    /// Mint queued NFTs from an open drop to a list of wallets
+    Airdrop(Airdrop),
     /// Upload files to Hub
     Upload(Upload),
 }
@@ -142,6 +152,33 @@ pub struct ConfigHubEndpoint {
     pub endpoint: Option<String>,
 }
 
+/// Options for hub airdrop
+#[derive(clap::Args)]
+pub struct Airdrop {
+    /// Concurrency options
+    #[command(flatten)]
+    pub concurrency: ConcurrencyOpts,
+
+    /// UUID of the open drop to mint from
+    #[arg(short = 'd', long = "drop")]
+    pub drop_id: Uuid,
+
+    /// Do not mint compressed NFTs
+    #[arg(long)]
+    pub no_compressed: bool,
+
+    /// Number of NFTs to mint to each wallet specified
+    #[arg(short = 'n', long, default_value_t = 1)]
+    pub mints_per_wallet: u32,
+
+    /// Path to one or more files containing newline-separated wallet addresses
+    /// to mint to
+    ///
+    /// Passing a single hyphen `-` will read from STDIN.
+    #[arg(required = true)]
+    pub wallets: Vec<PathBuf>,
+}
+
 /// Options for hub upload
 #[derive(clap::Args)]
 pub struct Upload {
@@ -160,17 +197,17 @@ pub enum UploadSubcommand {
 /// Options for hub upload drop
 #[derive(clap::Args)]
 pub struct UploadDrop {
-    /// UUID of the drop to upload to
+    /// Concurrency options
+    #[command(flatten)]
+    pub concurrency: ConcurrencyOpts,
+
+    /// UUID of the open drop to queue mints to
     #[arg(short = 'd', long = "drop")]
     pub drop_id: Uuid,
 
     /// Specify a search path for assets
     #[arg(short = 'I', long = "include")]
     pub include_dirs: Vec<PathBuf>,
-
-    /// Limit the number of concurrently-running jobs
-    #[arg(short = 'j', long = "jobs", default_value_t = 4)]
-    pub jobs: u16,
 
     /// Path to a directory containing metadata JSON files to upload
     #[arg(required = true)]

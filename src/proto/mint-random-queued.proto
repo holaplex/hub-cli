@@ -1,0 +1,15 @@
+syntax = 'proto3';
+
+package cache.mint_random_queued;
+
+message MintRandomQueued {
+  string mint_id = 1;
+  optional string mint_address = 2; 
+  CreationStatus status = 3;
+}
+
+enum CreationStatus {
+  CREATED = 0;
+  FAILED = 1;
+  PENDING = 2;
+}

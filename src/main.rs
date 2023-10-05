@@ -16,14 +16,18 @@ mod cli;
 mod config;
 
 mod commands {
+    pub mod airdrop;
     pub mod config;
     pub mod upload_drop;
 }
 
 mod common {
     pub mod concurrent;
+    pub mod graphql;
     pub mod metadata_json;
+    pub mod pubkey;
     pub mod reqwest;
+    pub mod stats;
     pub mod tokio;
     pub mod toposort;
     pub mod url_permissive;
@@ -45,7 +49,7 @@ mod entry {
     use crate::{
         cache::CacheConfig,
         cli::{log_color, Opts, Subcommand, UploadSubcommand},
-        commands::{config, upload_drop},
+        commands::{airdrop, config, upload_drop},
         config::{Config, ConfigLocation},
     };
 
@@ -73,6 +77,7 @@ mod entry {
 
         match subcmd {
             Subcommand::Config(c) => config::run(&config(true)?, c),
+            Subcommand::Airdrop(a) => airdrop::run(&read(config)?, cache, a),
             Subcommand::Upload(u) => match u.subcmd {
                 UploadSubcommand::Drop(d) => upload_drop::run(&read(config)?, cache, d),
             },

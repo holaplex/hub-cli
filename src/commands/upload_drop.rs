@@ -1,28 +1,23 @@
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    fmt::Write,
     fs::{self, File},
     io::{self, prelude::*},
     iter,
     num::NonZeroUsize,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 use crossbeam::{
     channel::{self, Sender},
     queue::ArrayQueue,
 };
 use dashmap::DashMap;
-use futures_util::FutureExt;
 use graphql_client::GraphQLQuery;
 use itertools::Either;
-use log::{error, info, trace, warn};
+use log::{info, trace, warn};
 use reqwest::multipart;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
@@ -34,8 +29,10 @@ use crate::{
     cli::UploadDrop,
     common::{
         concurrent,
+        graphql::UUID,
         metadata_json::{self, MetadataJson},
-        reqwest::ResponseExt,
+        reqwest::{ClientExt, ResponseExt},
+        stats::Counter,
         tokio::runtime,
         toposort::{Dependencies, Dependency, PendingFail},
         url_permissive::PermissiveUrl,
@@ -50,9 +47,6 @@ struct UploadedAsset {
     name: String,
     url: Url,
 }
-
-#[allow(clippy::upper_case_acronyms)]
-type UUID = Uuid;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -141,15 +135,15 @@ impl From<metadata_json::File> for queue_mint_to_drop::MetadataJsonFileInput {
 
 #[derive(Default)]
 struct Stats {
-    uploaded_assets: AtomicUsize,
-    queued_mints: AtomicUsize,
+    uploaded_assets: Counter,
+    queued_mints: Counter,
 }
 
 pub fn run(config: &Config, cache: CacheConfig, args: UploadDrop) -> Result<()> {
     let UploadDrop {
+        concurrency,
         drop_id,
         include_dirs,
-        jobs,
         input_dirs,
     } = args;
     let include_dirs: HashSet<_> = include_dirs.into_iter().collect();
@@ -209,35 +203,9 @@ pub fn run(config: &Config, cache: CacheConfig, args: UploadDrop) -> Result<()> 
         stats: Arc::default(),
     };
 
-    let mut any_errs = false;
     runtime()?.block_on(async move {
-        let res = concurrent::try_run(
-            jobs.into(),
-            |e| {
-                error!("{e:?}");
-                any_errs = true;
-            },
-            || {
-                let job = match rx.try_recv() {
-                    Ok(j) => Some(j),
-                    Err(channel::TryRecvError::Empty) => None,
-                    Err(e) => return Err(e).context("Error getting job from queue"),
-                };
-
-                let Some(job) = job else {
-                    return Ok(None);
-                };
-
-                trace!("Submitting job: {job:?}");
-
-                Ok(Some(job.run(ctx.clone()).map(|f| {
-                    f.context("Worker task panicked").and_then(|r| r)
-                })))
-            },
-        )
-        .await;
-
-        debug_assert!(rx.is_empty(), "Trailing jobs in queue");
+        let (res, any_errs) =
+            concurrent::try_run_channel(concurrency, rx, |j| j.run(ctx.clone())).await;
 
         let Stats {
             uploaded_assets,
@@ -245,8 +213,8 @@ pub fn run(config: &Config, cache: CacheConfig, args: UploadDrop) -> Result<()> 
         } = &*ctx.stats;
         info!(
             "Uploaded {assets} asset(s) and queued {mints} mint(s)",
-            assets = uploaded_assets.load(std::sync::atomic::Ordering::Relaxed),
-            mints = queued_mints.load(std::sync::atomic::Ordering::Relaxed)
+            assets = uploaded_assets.load(),
+            mints = queued_mints.load()
         );
 
         if any_errs {
@@ -257,9 +225,7 @@ pub fn run(config: &Config, cache: CacheConfig, args: UploadDrop) -> Result<()> 
         }
 
         res
-    })?;
-
-    Ok(())
+    })
 }
 
 #[derive(Clone)]
@@ -303,6 +269,26 @@ impl Context {
                 Some(Ok((d, opened)))
             })
             .transpose()
+    }
+}
+
+// The cost of shuffling these around is probably less than the cost of allocation
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+enum Job {
+    ScanJson(ScanJsonJob),
+    UploadAsset(UploadAssetJob),
+    QueueJson(QueueJsonJob),
+}
+
+impl Job {
+    #[inline]
+    fn run(self, ctx: Context) -> JoinHandle<Result<()>> {
+        match self {
+            Job::ScanJson(j) => j.run(ctx),
+            Job::UploadAsset(j) => j.run(ctx),
+            Job::QueueJson(j) => j.run(ctx),
+        }
     }
 }
 
@@ -468,14 +454,15 @@ impl UploadAssetJob {
             let ck = Checksum::read_rewind_async(&path, &mut file).await?;
 
             let cache: AssetUploadCache = ctx.cache(dir)?.get().await?;
-            let cached_url = cache
-                .get(path.clone(), ck)
-                .await?
-                .and_then(|AssetUpload { url }| {
-                    Url::parse(&url)
-                        .map_err(|e| warn!("Invalid cache URL {url:?}: {e}"))
-                        .ok()
-                });
+            let cached_url =
+                cache
+                    .get_named(path.clone(), ck)
+                    .await?
+                    .and_then(|AssetUpload { url }| {
+                        Url::parse(&url)
+                            .map_err(|e| warn!("Invalid cache URL {url:?}: {e}"))
+                            .ok()
+                    });
 
             let dest_url;
             if let Some(url) = cached_url {
@@ -523,11 +510,11 @@ impl UploadAssetJob {
                     .find(|u| u.name == name)
                     .with_context(|| format!("Missing upload response data for {path:?}"))?;
 
-                ctx.stats.uploaded_assets.fetch_add(1, Ordering::Relaxed);
+                ctx.stats.uploaded_assets.increment();
                 info!("Successfully uploaded {path:?}");
 
                 cache
-                    .set(path.clone(), ck, AssetUpload {
+                    .set_named(path.clone(), ck, AssetUpload {
                         url: upload.url.to_string(),
                     })
                     .await
@@ -566,26 +553,6 @@ struct QueueJsonJob {
 }
 
 impl QueueJsonJob {
-    fn format_errors<T>(
-        errors: Option<Vec<graphql_client::Error>>,
-        ok: T,
-        f: impl FnOnce(String) -> T,
-    ) -> T {
-        let mut errs = errors.into_iter().flatten().peekable();
-
-        if errs.peek().is_some() {
-            let mut s = String::new();
-
-            for err in errs {
-                write!(s, "\n  {err}").unwrap();
-            }
-
-            f(s)
-        } else {
-            ok
-        }
-    }
-
     fn rewrite_json(json: &mut MetadataJson, rewrites: Option<Arc<ArrayQueue<FileRewrite>>>) {
         let rewrites: HashMap<_, _> = rewrites
             .into_iter()
@@ -652,7 +619,7 @@ impl QueueJsonJob {
                 serde_json::to_string(&input).map_or_else(|e| e.to_string(), |j| j.to_string())
             );
 
-            let cached_mint = cache.get(path.clone(), ck).await?;
+            let cached_mint = cache.get_named(path.clone(), ck).await?;
 
             if let Some(mint) = cached_mint {
                 trace!("Using cached mint {mint:?} for {path:?}");
@@ -669,53 +636,28 @@ impl QueueJsonJob {
                 }
             } else {
                 let res = ctx
-                .client
-                .post(ctx.graphql_endpoint)
-                .json(&QueueMintToDrop::build_query(input))
-                .send()
-                .await
-                .error_for_hub_status(|| format!("queueMintToDrop mutation for {path:?}"))?
-                .json::<graphql_client::Response<<QueueMintToDrop as GraphQLQuery>::ResponseData>>()
-                .await
-                .with_context(|| {
-                    format!("Error parsing queueMintToDrop mutation response for {path:?}")
-                })?;
+                    .client
+                    .graphql::<QueueMintToDrop>()
+                    .post(ctx.graphql_endpoint, input, || {
+                        format!("queueMintToDrop mutation for {path:?}")
+                    })
+                    .await?;
 
-                trace!("GraphQL response for {path:?}: {res:?}");
+                let queue_mint_to_drop::ResponseData {
+                    queue_mint_to_drop:
+                        queue_mint_to_drop::QueueMintToDropQueueMintToDrop {
+                            collection_mint:
+                                queue_mint_to_drop::QueueMintToDropQueueMintToDropCollectionMint {
+                                    id: collection_mint,
+                                },
+                        },
+                } = res.data;
 
-                let collection_mint;
-                if let Some(data) = res.data {
-                    Self::format_errors(res.errors, (), |s| {
-                        warn!(
-                            "queueMintToDrop mutation for {path:?} returned one or more errors:{s}"
-                        );
-                    });
-
-                    let queue_mint_to_drop::ResponseData {
-                        queue_mint_to_drop:
-                            queue_mint_to_drop::QueueMintToDropQueueMintToDrop {
-                                collection_mint:
-                                    queue_mint_to_drop::QueueMintToDropQueueMintToDropCollectionMint {
-                                        id,
-                                    },
-                            },
-                    } = data;
-                    collection_mint = id;
-
-                    ctx.stats.queued_mints.fetch_add(1, Ordering::Relaxed);
-                    info!("Mint successfully queued for {path:?}");
-                } else {
-                    Self::format_errors(res.errors, Ok(()), |s| {
-                        bail!(
-                            "queueMintToDrop mutation for {path:?} returned one or more errors:{s}"
-                        )
-                    })?;
-
-                    bail!("queueMintToDrop mutation for {path:?} returned no data");
-                }
+                ctx.stats.queued_mints.increment();
+                info!("Mint successfully queued for {path:?}");
 
                 cache
-                    .set(path, ck, DropMint {
+                    .set_named(path, ck, DropMint {
                         collection_mint: collection_mint.to_bytes_le().into(),
                         input_hash: input_ck.to_bytes().into(),
                     })
@@ -732,25 +674,5 @@ impl QueueJsonJob {
 impl PendingFail for QueueJsonJob {
     fn failed(self) {
         warn!("Skipping {:?} due to failed dependencies", self.path);
-    }
-}
-
-// The cost of shuffling these around is probably less than the cost of allocation
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-enum Job {
-    ScanJson(ScanJsonJob),
-    UploadAsset(UploadAssetJob),
-    QueueJson(QueueJsonJob),
-}
-
-impl Job {
-    #[inline]
-    fn run(self, ctx: Context) -> JoinHandle<Result<()>> {
-        match self {
-            Job::ScanJson(j) => j.run(ctx),
-            Job::UploadAsset(j) => j.run(ctx),
-            Job::QueueJson(j) => j.run(ctx),
-        }
     }
 }
