@@ -232,7 +232,7 @@ impl MintRandomQueuedJob {
                     CreationStatus::Failed => {
                         // TODO: retry here
 
-                        warn!("Mint {:?} failed.  Retrying...", r.mint_id);
+                        warn!("Mint {:?} failed.", r.mint_id);
                     },
                     CreationStatus::Pending => {
                         info!("Mint {:?} is pending.  Checking status again...", r.mint_id);
@@ -378,7 +378,7 @@ impl CheckMintStatusJob {
                         bail!("Mint {mint_id:?} for {airdrop_id:?} failed too many times");
                     };
 
-                    warn!("Mint {mint_id:?} failed.  Retrying...");
+                    warn!("Mint {mint_id:?} failed.");
                     tokio::time::sleep(dur).await;
 
                     cache
