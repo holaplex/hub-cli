@@ -135,8 +135,8 @@ pub fn run(config: &Config, cache: CacheConfig, args: Airdrop) -> Result<()> {
     let ctx = Context {
         // TODO: what should the correct path for this be?
         cache: Cache::load_sync(Path::new(".airdrops").join(drop_id.to_string()), cache)?,
-        graphql_endpoint: config.graphql_endpoint().clone(),
-        client: config.graphql_client()?,
+        graphql_endpoint: config.graphql_endpoint()?,
+        client: config.api_client()?,
         q: tx,
         stats: Arc::default(),
     };
