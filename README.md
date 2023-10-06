@@ -121,14 +121,15 @@ The `DROP_ID` parameter accepts the UUID of an open drop created with Hub. The -
 ### Optional Parameters:
 
 - `--concurrency <OPTIONS>`:
-   - Is used to control the level of concurrency.
+
+  - Is used to control the level of concurrency. Default value is **4**
 
 - `--no-compressed`:
-   - An optional flag to mint uncompressed NFTs only.
+
+  - An optional flag to mint uncompressed NFTs only. Default value is **false**
 
 - `--mints-per-wallet <NUMBER>`:
-   - Defines the number of NFTs to mint to each wallet with a default value of 1 if not specified.
-
+  - Defines the number of NFTs to mint to each wallet with a default value of **1** if not specified.
 
 ```sh
 $ hub upload drop --drop 00000000-0000-0000-0000-000000000000 \
