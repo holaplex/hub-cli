@@ -34,7 +34,7 @@ rustyline = { version = "12.0.0", default-features = false }
 serde = { version = "1.0.188", features = ["derive"] }
 serde_json = { version = "1.0.107", features = ["float_roundtrip", "preserve_order"] }
 tokio = { version = "1.32.0", features = ["parking_lot", "rt-multi-thread"] }
-toml = { version = "0.8.0", features = ["preserve_order"] }
+toml_edit = "0.20.2"
 url = { version = "2.4.1", features = ["serde"] }
 uuid = { version = "1.4.1", features = ["serde"] }
 xxhash-rust = { version = "0.8.7", features = ["xxh3", "const_xxh3"] }

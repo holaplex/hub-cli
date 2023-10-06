@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Context, Result};
 
 use crate::{
-    cli::{Config as Opts, ConfigGraphqlEndpoint, ConfigHubEndpoint, ConfigSubcommand},
+    cli::{Config as Opts, ConfigApiEndpoint, ConfigSubcommand},
     config::{Config, ConfigLocation},
 };
 
@@ -14,15 +14,9 @@ fn mutate_config(
     config_location: &ConfigLocation,
     mutate: impl FnOnce(&mut Config) -> Result<()>,
 ) -> Result<()> {
-    let config = config_location.load()?;
-    let mut next_config = config.clone();
-    mutate(&mut next_config)?;
-
-    if next_config != config {
-        next_config.save(config_location)?;
-    }
-
-    Ok(())
+    let mut config = config_location.load()?;
+    mutate(&mut config)?;
+    config.save(config_location)
 }
 
 pub fn run(config: &ConfigLocation, opts: Opts) -> Result<()> {
@@ -34,8 +28,8 @@ pub fn run(config: &ConfigLocation, opts: Opts) -> Result<()> {
             println!("{}", canon.as_deref().unwrap_or(config.path()).display());
             Ok(())
         },
-        ConfigSubcommand::GraphqlEndpoint(e) => mutate_config(config, |c| graphql_endpoint(c, e)),
-        ConfigSubcommand::HubEndpoint(e) => mutate_config(config, |c| hub_endpoint(c, e)),
+        ConfigSubcommand::Update => config.load()?.save(config),
+        ConfigSubcommand::ApiEndpoint(e) => mutate_config(config, |c| api_endpoint(c, e)),
         ConfigSubcommand::Token => mutate_config(config, token),
     }
 }
@@ -54,51 +48,21 @@ where T::Err: fmt::Display {
     }
 }
 
-fn graphql_endpoint(config: &mut Config, endpoint: ConfigGraphqlEndpoint) -> Result<()> {
-    let ConfigGraphqlEndpoint { get, endpoint } = endpoint;
+fn api_endpoint(config: &mut Config, endpoint: ConfigApiEndpoint) -> Result<()> {
+    let ConfigApiEndpoint { get, endpoint } = endpoint;
 
     if get {
-        println!("{}", config.graphql_endpoint());
+        println!("{}", config.api_endpoint());
         return Ok(());
     }
 
     let endpoint = if let Some(e) = endpoint {
         e.parse().context("Invalid endpoint URL")?
     } else {
-        read_insecure("Enter new GraphQL endpoint: ", "Invalid URL")?
+        read_insecure("Enter new API endpoint: ", "Invalid URL")?
     };
 
-    config.set_graphql_endpoint(endpoint);
-
-    Ok(())
-}
-
-fn hub_endpoint(config: &mut Config, endpoint: ConfigHubEndpoint) -> Result<()> {
-    let ConfigHubEndpoint {
-        get,
-        reset,
-        endpoint,
-    } = endpoint;
-
-    if get {
-        println!(
-            "{}",
-            config
-                .hub_endpoint()
-                .context("Error computing root Hub endpoint from GraphQL endpoint")?
-        );
-        return Ok(());
-    }
-
-    let endpoint = if reset {
-        None
-    } else if let Some(e) = endpoint {
-        Some(e.parse().context("Invalid endpoint URL")?)
-    } else {
-        Some(read_insecure("Enter new Hub endpoint: ", "Invalid URL")?)
-    };
-
-    config.set_hub_endpoint(endpoint);
+    config.set_api_endpoint(endpoint);
 
     Ok(())
 }

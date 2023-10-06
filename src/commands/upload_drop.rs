@@ -40,12 +40,10 @@ use crate::{
     config::Config,
 };
 
-type UploadResponse = Vec<UploadedAsset>;
-
 #[derive(Debug, Serialize, Deserialize)]
-struct UploadedAsset {
-    name: String,
-    url: Url,
+struct UploadResponse {
+    uri: Url,
+    cid: String,
 }
 
 #[derive(GraphQLQuery)]
@@ -196,9 +194,9 @@ pub fn run(config: &Config, cache: CacheConfig, args: UploadDrop) -> Result<()> 
             .into_boxed_slice()
             .into(),
         drop_id,
-        graphql_endpoint: config.graphql_endpoint().clone(),
+        graphql_endpoint: config.graphql_endpoint()?,
         upload_endpoint: config.upload_endpoint()?,
-        client: config.graphql_client()?,
+        client: config.api_client()?,
         q: tx,
         stats: Arc::default(),
     };
@@ -475,7 +473,7 @@ impl UploadAssetJob {
                     .to_string_lossy()
                     .into_owned();
 
-                let mut uploads = ctx
+                let upload = ctx
                     .client
                     .post(ctx.upload_endpoint)
                     .multipart(
@@ -499,29 +497,20 @@ impl UploadAssetJob {
                     .await
                     .with_context(|| {
                         format!("Error deserializing upload response JSON for {path:?}")
-                    })?
-                    .into_iter();
-
-                if uploads.len() > 1 {
-                    warn!("Trailing values in response data for {path:?}");
-                }
-
-                let upload = uploads
-                    .find(|u| u.name == name)
-                    .with_context(|| format!("Missing upload response data for {path:?}"))?;
+                    })?;
 
                 ctx.stats.uploaded_assets.increment();
                 info!("Successfully uploaded {path:?}");
 
                 cache
                     .set_named(path.clone(), ck, AssetUpload {
-                        url: upload.url.to_string(),
+                        url: upload.uri.to_string(),
                     })
                     .await
                     .map_err(|e| warn!("{e:?}"))
                     .ok();
 
-                dest_url = upload.url;
+                dest_url = upload.uri;
             }
 
             rewrites
