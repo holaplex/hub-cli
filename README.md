@@ -1,4 +1,5 @@
 # `hub-cli`
+
 A command-line tool for interfacing with Holaplex Hub
 
 ---
@@ -11,8 +12,9 @@ shell scripts or directly from a terminal.
 <!-- TODO: add better install instructions here -->
 
 ### Prerequisites
+
 To install `hub`, you'll need a Rust toolchain with Cargo, `clang`, and a copy
-of the `protoc` Protobuf compiler.  Additionally on POSIX systems you'll need
+of the `protoc` Protobuf compiler. Additionally on POSIX systems you'll need
 `pkg-config`, include files for OpenSSL, and on Linux the include files for
 `liburing`.
 
@@ -43,10 +45,10 @@ $ cargo install --path hub-cli
 ### <a name="config-file"></a> Config locations
 
 By default, `hub` creates a configuration file named `config.toml` in
-a dedicated subdirectory of the current user's configuration directory.  All
-commands will read or write to this file.  However, if the current directory in
+a dedicated subdirectory of the current user's configuration directory. All
+commands will read or write to this file. However, if the current directory in
 which `hub` is run contains a file named `.hub-config.toml`, it will read and
-write to that file instead.  Additionally, the user can override the current
+write to that file instead. Additionally, the user can override the current
 config location by passing `-C path/to/my-config.toml` to any `hub` command.
 
 ## Usage
@@ -57,7 +59,7 @@ For additional help with the command-line interface, you can always run:
 $ hub help
 ```
 
-This will print info about available commands and global options.  For help with
+This will print info about available commands and global options. For help with
 a specific command, run:
 
 ```sh
@@ -87,10 +89,10 @@ $ hub upload drop --drop <DROP_ID> <INPUT_DIR...>
 ```
 
 The `DROP_ID` parameter accepts the UUID of an open drop created with Hub, and
-`INPUT_DIR` takes one or more directories containing JSON metadata files.  All
+`INPUT_DIR` takes one or more directories containing JSON metadata files. All
 assets specified using local paths in metadata files will be first uploaded to
 the web using Hub's permaweb upload endpoint, and their permanent URL will be
-used in place of a filesystem path.  `hub` searches for asset paths relative to
+used in place of a filesystem path. `hub` searches for asset paths relative to
 the folder containing the JSON file referencing them; if any assets are in
 separate folders, each folder can be specified with the `-I` flag:
 
@@ -104,3 +106,37 @@ $ hub upload drop --drop 00000000-0000-0000-0000-000000000000 \
 When include paths are specified, `hub` first searches the current JSON
 directory, then searches each include directory in the order they were
 specified, stopping as soon as it finds a match.
+
+### `airdrop`
+
+This command airdrops NFTs by minting them from an open drop to specified wallet addresses.
+This should be run after the mints are queued for the specified open drop.
+
+```sh
+$ hub airdrop --drop <DROP_ID> <WALLETS>
+```
+
+The `DROP_ID` parameter accepts the UUID of an open drop created with Hub. The --wallets parameter accepts file containing newline-separated wallet addresses for the airdrop. If a single hyphen - is passed, the utility will read from STDIN.
+
+### Optional Parameters:
+
+- `--concurrency <OPTIONS>`:
+
+  - Is used to control the level of concurrency. Default value is **4**
+
+- `--no-compressed`:
+
+  - An optional flag to mint uncompressed NFTs only. Default value is **false**
+
+- `--mints-per-wallet <NUMBER>`:
+  - Defines the number of NFTs to mint to each wallet with a default value of **1** if not specified.
+
+```sh
+$ hub upload drop --drop 00000000-0000-0000-0000-000000000000 \
+    --wallets /path/to/wallets.txt
+    --concurrency 4 \
+    --no-compressed \
+    --mints-per-wallet 2
+```
+
+In this example, the airdrop command is invoked with a concurrency level of 4, specifying the open drop UUID 00000000-0000-0000-0000-000000000000, opting not to mint them as compressed NFTs, defining 2 mints per wallet, and providing the path to the file wallets.txt containing the target wallet addresses.
