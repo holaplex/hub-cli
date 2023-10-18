@@ -1,6 +1,6 @@
-mutation MintRandomQueuedToDrop($in: MintRandomQueuedInput!) {
-  mintRandomQueuedToDrop(input: $in) {
-    collectionMint {
+mutation MintRandomQueuedToDropBatched($in: MintRandomQueuedBatchedInput!) {
+  mintRandomQueuedToDropBatched(input: $in) {
+    collectionMints {
       id
       creationStatus
     }
