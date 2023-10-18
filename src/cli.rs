@@ -152,7 +152,7 @@ pub struct Airdrop {
     pub mints_per_wallet: u32,
 
     /// Number of NFTs to mint to each wallet specified
-    #[arg(short = 'b', long, default_value_t = 50)]
+    #[arg(short = 'b', long, default_value_t = 25)]
     pub batch_size: usize,
 
     /// Path to one or more files containing newline-separated wallet addresses

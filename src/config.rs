@@ -200,7 +200,8 @@ impl Config {
         let text = match fs::read_to_string(&location.path) {
             Ok(s) => s,
             Err(e)
-                if e.kind() == ErrorKind::NotFound && !matches!(location.mode, ConfigMode::ExplicitRead) =>
+                if e.kind() == ErrorKind::NotFound
+                    && !matches!(location.mode, ConfigMode::ExplicitRead) =>
             {
                 return Ok(Self::default());
             },
@@ -291,7 +292,10 @@ impl Config {
     }
 
     pub fn save(&mut self, location: &ConfigLocation) -> Result<()> {
-        assert!(location.mode.writable(), "Config::save called with a non-writable location!");
+        assert!(
+            location.mode.writable(),
+            "Config::save called with a non-writable location!"
+        );
 
         if matches!(location.mode, ConfigMode::Implicit(_)) {
             if let Some(dir) = location.path.parent() {

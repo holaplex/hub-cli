@@ -35,9 +35,7 @@ pub fn run(config: &ConfigLocation, opts: Opts) -> Result<()> {
 }
 
 fn read_insecure<T: std::str::FromStr>(prompt: &str, bad_parse: impl fmt::Display) -> Result<T>
-where
-    T::Err: fmt::Display,
-{
+where T::Err: fmt::Display {
     let mut ed = rustyline::Editor::<(), _>::new().context("Error opening STDIN for reading")?;
 
     loop {

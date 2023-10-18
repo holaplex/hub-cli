@@ -5,7 +5,8 @@ use std::{
     io::{prelude::*, BufReader},
     path::Path,
     sync::Arc,
-    time::Duration, thread,
+    thread,
+    time::Duration,
 };
 
 use anyhow::{bail, Context as _, Result};
@@ -13,7 +14,7 @@ use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
 use crossbeam::channel::{self, Sender};
 use graphql_client::GraphQLQuery;
 use log::{info, warn};
-use tokio::{  task::JoinHandle};
+use tokio::task::JoinHandle;
 use url::Url;
 use uuid::Uuid;
 
@@ -279,10 +280,6 @@ impl MintRandomQueuedBatchJob {
                     ids.push(airdrop_id);
                     ctx.stats.queued_mints.increment();
                 }
-
-                
-
-                
             }
 
             if ids.is_empty() {
@@ -298,37 +295,33 @@ impl MintRandomQueuedBatchJob {
             };
 
             let res = ctx
-                    .client
-                    .graphql::<MintRandomQueuedToDropBatched>()
-                    .post(ctx.graphql_endpoint, input, || {
-                        format!("mintRandomQueuedToDropBatched mutation")
-                    })
-                    .await?;
+                .client
+                .graphql::<MintRandomQueuedToDropBatched>()
+                .post(ctx.graphql_endpoint, input, || {
+                    format!("mintRandomQueuedToDropBatched mutation")
+                })
+                .await?;
 
-                let mint_random_queued_to_drop_batched::ResponseData {
+            let mint_random_queued_to_drop_batched::ResponseData {
                     mint_random_queued_to_drop_batched:
                         mint_random_queued_to_drop_batched::MintRandomQueuedToDropBatchedMintRandomQueuedToDropBatched {
-                            collection_mints  
+                            collection_mints
                         },
                 } = res.data;
 
-                for (mint, airdrop_id) in collection_mints.iter().zip(ids.into_iter()) {
-                    let MintRandomQueuedToDropBatchedMintRandomQueuedToDropBatchedCollectionMints {
-                        id,
-                         
-                        ..
-                    } = mint;
-                    info!("Pending for wallet {:?}", airdrop_id.wallet);
-                    
+            for (mint, airdrop_id) in collection_mints.iter().zip(ids.into_iter()) {
+                let MintRandomQueuedToDropBatchedMintRandomQueuedToDropBatchedCollectionMints {
+                    id,
+                    ..
+                } = mint;
+                info!("Pending for wallet {:?}", airdrop_id.wallet);
+
                 cache
-                    .set(
-                         airdrop_id,
-                        MintRandomQueued {
-                            mint_id: id.to_string(),
-                            mint_address: None,
-                            status: CreationStatus::Pending.into(),
-                        },
-                    )
+                    .set(airdrop_id, MintRandomQueued {
+                        mint_id: id.to_string(),
+                        mint_address: None,
+                        status: CreationStatus::Pending.into(),
+                    })
                     .await?;
 
                 ctx.q
@@ -338,9 +331,8 @@ impl MintRandomQueuedBatchJob {
                         backoff: backoff.build(),
                     }))
                     .context("Error submitting mint status check job")?;
-
-                }
-            thread::sleep(Duration::from_secs(16));
+            }
+            thread::sleep(Duration::from_secs(15));
             Ok(())
         })
     }
@@ -385,21 +377,17 @@ impl CheckMintStatusJob {
                 id,
                 creation_status,
             } = response;
-           
 
             match creation_status {
                 mint_status::CreationStatus::CREATED => {
                     info!("Mint {mint_id:?} airdropped for {airdrop_id:?}");
                     ctx.stats.created_mints.increment();
                     cache
-                        .set(
-                            airdrop_id,
-                            MintRandomQueued {
-                                mint_id: id.to_string(),
-                                mint_address: None,
-                                status: CreationStatus::Created.into(),
-                            },
-                        )
+                        .set(airdrop_id, MintRandomQueued {
+                            mint_id: id.to_string(),
+                            mint_address: None,
+                            status: CreationStatus::Created.into(),
+                        })
                         .await?;
                 },
                 mint_status::CreationStatus::PENDING => {
@@ -430,14 +418,11 @@ impl CheckMintStatusJob {
                     tokio::time::sleep(dur).await;
 
                     cache
-                        .set(
-                            airdrop_id,
-                            MintRandomQueued {
-                                mint_id: id.to_string(),
-                                mint_address: None,
-                                status: CreationStatus::Failed.into(),
-                            },
-                        )
+                        .set(airdrop_id, MintRandomQueued {
+                            mint_id: id.to_string(),
+                            mint_address: None,
+                            status: CreationStatus::Failed.into(),
+                        })
                         .await
                         .context("Error submitting mint retry job")?;
                 },
