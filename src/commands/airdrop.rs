@@ -317,20 +317,23 @@ impl MintRandomQueuedBatchJob {
                 info!("Pending for wallet {:?}", airdrop_id.wallet);
 
                 cache
-                    .set(airdrop_id, MintRandomQueued {
-                        mint_id: id.to_string(),
-                        mint_address: None,
-                        status: CreationStatus::Pending.into(),
-                    })
+                    .set(
+                        airdrop_id,
+                        MintRandomQueued {
+                            mint_id: id.to_string(),
+                            mint_address: None,
+                            status: CreationStatus::Pending.into(),
+                        },
+                    )
                     .await?;
 
-                ctx.q
-                    .send(Job::CheckStatus(CheckMintStatusJob {
-                        airdrop_id,
-                        mint_id: mint.id,
-                        backoff: backoff.build(),
-                    }))
-                    .context("Error submitting mint status check job")?;
+                // ctx.q
+                //     .send(Job::CheckStatus(CheckMintStatusJob {
+                //         airdrop_id,
+                //         mint_id: mint.id,
+                //         backoff: backoff.build(),
+                //     }))
+                //     .context("Error submitting mint status check job")?;
             }
             thread::sleep(Duration::from_secs(15));
             Ok(())
@@ -383,11 +386,14 @@ impl CheckMintStatusJob {
                     info!("Mint {mint_id:?} airdropped for {airdrop_id:?}");
                     ctx.stats.created_mints.increment();
                     cache
-                        .set(airdrop_id, MintRandomQueued {
-                            mint_id: id.to_string(),
-                            mint_address: None,
-                            status: CreationStatus::Created.into(),
-                        })
+                        .set(
+                            airdrop_id,
+                            MintRandomQueued {
+                                mint_id: id.to_string(),
+                                mint_address: None,
+                                status: CreationStatus::Created.into(),
+                            },
+                        )
                         .await?;
                 },
                 mint_status::CreationStatus::PENDING => {
@@ -418,11 +424,14 @@ impl CheckMintStatusJob {
                     tokio::time::sleep(dur).await;
 
                     cache
-                        .set(airdrop_id, MintRandomQueued {
-                            mint_id: id.to_string(),
-                            mint_address: None,
-                            status: CreationStatus::Failed.into(),
-                        })
+                        .set(
+                            airdrop_id,
+                            MintRandomQueued {
+                                mint_id: id.to_string(),
+                                mint_address: None,
+                                status: CreationStatus::Failed.into(),
+                            },
+                        )
                         .await
                         .context("Error submitting mint retry job")?;
                 },
