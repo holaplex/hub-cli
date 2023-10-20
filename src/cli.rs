@@ -81,7 +81,7 @@ pub struct CacheOpts {
 #[derive(clap::Args)]
 pub struct ConcurrencyOpts {
     /// Limit the number of concurrently-running jobs
-    #[arg(short = 'j', long = "jobs", default_value_t = 4)]
+    #[arg(short = 'j', long = "jobs", default_value_t = 2)]
     pub jobs: u16,
 }
 
@@ -150,6 +150,10 @@ pub struct Airdrop {
     /// Number of NFTs to mint to each wallet specified
     #[arg(short = 'n', long, default_value_t = 1)]
     pub mints_per_wallet: u32,
+
+    /// Number of NFTs to mint to each wallet specified
+    #[arg(short = 'b', long, default_value_t = 25)]
+    pub batch_size: usize,
 
     /// Path to one or more files containing newline-separated wallet addresses
     /// to mint to
